@@ -67,6 +67,8 @@ import Text.Printf (printf)
 import Text.Regex.TDFA (getAllTextMatches, (=~))
 import Prelude (read)
 
+import Hydra.Chain.CardanoClient ( CardanoClient(..), ClientMode(..), QueryType(..) )
+
 data Event = Event
   { submittedAt :: UTCTime
   , validAt :: Maybe UTCTime
@@ -87,11 +89,11 @@ bench startingNodeId timeoutSeconds workDir dataset@Dataset{clientDatasets, titl
         let parties = Set.fromList (deriveParty <$> hydraKeys)
         let clusterSize = fromIntegral $ length clientDatasets
         withOSStats workDir $
-          withCardanoNodeDevnet (contramap FromCardanoNode tracer) workDir $ \node@RunningNode{nodeSocket} -> do
+          withCardanoNodeDevnet (contramap FromCardanoNode tracer) workDir $ \cardanoClient -> do
             putTextLn "Seeding network"
-            hydraScriptsTxId <- seedNetwork node dataset (contramap FromFaucet tracer)
+            hydraScriptsTxId <- seedNetwork cardanoClient dataset (contramap FromFaucet tracer)
             let contestationPeriod = UnsafeContestationPeriod 10
-            withHydraCluster tracer workDir nodeSocket startingNodeId cardanoKeys hydraKeys hydraScriptsTxId contestationPeriod $ \(leader :| followers) -> do
+            withHydraCluster tracer workDir cardanoClient startingNodeId cardanoKeys hydraKeys hydraScriptsTxId contestationPeriod $ \(leader :| followers) -> do
               let clients = leader : followers
               waitForNodesConnected tracer clients
 
@@ -102,7 +104,7 @@ bench startingNodeId timeoutSeconds workDir dataset@Dataset{clientDatasets, titl
                   headIsInitializingWith parties
 
               putTextLn "Comitting initialUTxO from dataset"
-              expectedUTxO <- commitUTxO node clients dataset
+              expectedUTxO <- commitUTxO cardanoClient clients dataset
 
               waitFor tracer (fromIntegral $ 10 * clusterSize) clients $
                 output "HeadIsOpen" ["utxo" .= expectedUTxO, "headId" .= headId]
@@ -234,29 +236,29 @@ movingAverage confirmations =
 -- dataset, and also publish the hydra scripts. The 'TxId' of the publishing
 -- transaction is returned.
 seedNetwork :: RunningNode -> Dataset -> Tracer IO FaucetLog -> IO TxId
-seedNetwork node@RunningNode{nodeSocket, networkId} Dataset{fundingTransaction, clientDatasets} tracer = do
+seedNetwork cardanoClient Dataset{fundingTransaction, clientDatasets} tracer = do
   fundClients
   forM_ clientDatasets fuelWith100Ada
-  publishHydraScriptsAs node Faucet
+  publishHydraScriptsAs cardanoClient Faucet
  where
   fundClients = do
-    submitTransaction networkId nodeSocket fundingTransaction
-    void $ awaitTransaction networkId nodeSocket fundingTransaction
+    submitTransactionClientOnline cardanoClient fundingTransaction
+    void $ awaitTransactionClientOnline cardanoClient fundingTransaction
 
   fuelWith100Ada ClientDataset{clientKeys = ClientKeys{signingKey}} = do
     let vk = getVerificationKey signingKey
-    seedFromFaucet node vk 100_000_000 tracer
+    seedFromFaucet cardanoClient vk 100_000_000 tracer
 
 -- | Commit all (expected to exit) 'initialUTxO' from the dataset using the
 -- (asumed same sequence) of clients.
 commitUTxO :: RunningNode -> [HydraClient] -> Dataset -> IO UTxO
-commitUTxO node clients Dataset{clientDatasets} =
+commitUTxO cardanoClient clients Dataset{clientDatasets} =
   mconcat <$> forM (zip clients clientDatasets) doCommit
  where
   doCommit (client, ClientDataset{initialUTxO, clientKeys = ClientKeys{externalSigningKey}}) = do
     requestCommitTx client initialUTxO
       <&> signTx externalSigningKey
-      >>= submitTx node
+      >>= submitTx cardanoClient
     pure initialUTxO
 
 processTransactions :: [HydraClient] -> Dataset -> IO (Map.Map TxId Event)

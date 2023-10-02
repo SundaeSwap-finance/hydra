@@ -16,7 +16,7 @@ import Hydra.Chain.CardanoClient
 
 import qualified Cardano.Api.UTxO as UTxO
 import Cardano.Slotting.Time (RelativeTime (getRelativeTime), diffRelativeTime, toRelativeTime)
-import CardanoNode (NodeLog (..), RunningNode (..))
+import CardanoNode (NodeLog (..), RunningNode)
 import qualified Data.Map as Map
 import qualified Hydra.Chain.CardanoClient as CardanoClient
 import Hydra.Logging (Tracer, traceWith)
@@ -78,20 +78,18 @@ sign signingKey body =
 
 -- | Submit a transaction to a 'RunningNode'
 submitTx :: RunningNode -> Tx -> IO ()
-submitTx RunningNode{networkId, nodeSocket} =
-  submitTransaction networkId nodeSocket
+submitTx = submitTransactionClient
 
 waitForPayment ::
-  NetworkId ->
-  SocketPath ->
+  CardanoClient 'ClientOnline ->
   Lovelace ->
   Address ShelleyAddr ->
   IO UTxO
-waitForPayment networkId socket amount addr =
+waitForPayment cardanoClient amount addr =
   go
  where
   go = do
-    utxo <- queryUTxO networkId socket QueryTip [addr]
+    utxo <- queryUTxOClientOnline cardanoClient QueryTip [addr]
     let expectedPayment = selectPayment utxo
     if expectedPayment /= mempty
       then pure $ UTxO expectedPayment
@@ -101,11 +99,10 @@ waitForPayment networkId socket amount addr =
     Map.filter ((== amount) . selectLovelace . txOutValue) utxo
 
 waitForUTxO ::
-  NetworkId ->
-  SocketPath ->
+  CardanoClient 'ClientOnline ->
   UTxO ->
   IO ()
-waitForUTxO networkId nodeSocket utxo =
+waitForUTxO cardanoClient utxo =
   forM_ (snd <$> UTxO.pairs utxo) forEachUTxO
  where
   forEachUTxO :: TxOut CtxUTxO -> IO ()
@@ -113,8 +110,7 @@ waitForUTxO networkId nodeSocket utxo =
     TxOut (ShelleyAddressInEra addr@ShelleyAddress{}) value _ _ -> do
       void $
         waitForPayment
-          networkId
-          nodeSocket
+        cardanoClient
           (selectLovelace value)
           addr
     txOut ->
@@ -169,14 +165,14 @@ waitForFullySynchronized ::
   Tracer IO NodeLog ->
   RunningNode ->
   IO ()
-waitForFullySynchronized tracer RunningNode{nodeSocket, networkId} = do
-  systemStart <- querySystemStart networkId nodeSocket QueryTip
+waitForFullySynchronized tracer cardanoClient = do
+  systemStart <- querySystemStartClient cardanoClient queryTypeTip
   check systemStart
  where
   check systemStart = do
     targetTime <- toRelativeTime systemStart <$> getCurrentTime
-    eraHistory <- queryEraHistory networkId nodeSocket QueryTip
-    tipSlotNo <- queryTipSlotNo networkId nodeSocket
+    eraHistory <- queryEraHistoryClient cardanoClient queryTypeTip
+    tipSlotNo <- queryTipSlotNo cardanoClient
     (tipTime, _slotLength) <- either throwIO pure $ getProgress tipSlotNo eraHistory
     let timeDifference = diffRelativeTime targetTime tipTime
     let percentDone = realToFrac (100.0 * getRelativeTime tipTime / getRelativeTime targetTime)

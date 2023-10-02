@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeApplications #-}
 -- | Module to deal with time in direct cardano chain layer. Defines the type
 -- for a 'PointInTime' and a means to acquire one via a 'TimeHandle' and
 -- 'queryTimeHandle'.
@@ -17,10 +18,11 @@ import Hydra.Cardano.Api (
  )
 import Hydra.Cardano.Api.Prelude (ChainPoint (ChainPoint, ChainPointAtGenesis))
 import Hydra.Chain.CardanoClient (
-  QueryPoint (QueryTip),
-  queryEraHistory,
-  querySystemStart,
-  queryTip,
+  CardanoClient(..),
+  QueryPoint (QueryTip), ClientMode (..), IsCardanoClient (..), querySystemStart, QueryType (queryTypeTip),
+
+
+
  )
 import Hydra.Ledger.Cardano.Evaluate (eraHistoryWithHorizonAt)
 import Ouroboros.Consensus.HardFork.History.Qry (interpretQuery, slotToWallclock, wallclockToSlot)
@@ -105,11 +107,11 @@ mkTimeHandle currentSlotNo systemStart eraHistory = do
 
 -- | Query node for system start and era history before constructing a
 -- 'TimeHandle' using the slot at the tip of the network.
-queryTimeHandle :: NetworkId -> SocketPath -> IO TimeHandle
-queryTimeHandle networkId socketPath = do
-  tip <- queryTip networkId socketPath
-  systemStart <- querySystemStart networkId socketPath QueryTip
-  eraHistory <- queryEraHistory networkId socketPath QueryTip
+queryTimeHandle :: forall mode. IsCardanoClient mode => CardanoClient mode -> IO TimeHandle
+queryTimeHandle client = do
+  tip <- queryTipClient client
+  systemStart <- querySystemStartClient client queryTypeTip
+  eraHistory <- queryEraHistoryClient client queryTypeTip
   currentTipSlot <-
     case tip of
       ChainPointAtGenesis -> pure $ SlotNo 0

@@ -12,7 +12,7 @@ import Hydra.Cardano.Api (
   serialiseToRawBytesHex,
   toLedgerPParams,
  )
-import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters)
+import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters, mkCardanoClientOnline, CardanoClient (queryGenesisParametersClientOnline), QueryType (queryTypeTip))
 import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.ScriptRegistry (publishHydraScripts)
 import Hydra.Chain.Direct.State (initialChainState)
@@ -121,7 +121,8 @@ main = do
   publish opts = do
     (_, sk) <- readKeyPair (publishSigningKey opts)
     let PublishOptions{publishNetworkId = networkId, publishNodeSocket} = opts
-    txId <- publishHydraScripts networkId publishNodeSocket sk
+        cardanoClient = mkCardanoClientOnline networkId publishNodeSocket
+    txId <- publishHydraScripts cardanoClient sk
     putStr (decodeUtf8 (serialiseToRawBytesHex txId))
 
   withNetwork tracer Server{sendOutput} signingKey parties host port peers nodeId =
@@ -133,7 +134,8 @@ main = do
 
   withCardanoLedger chainConfig protocolParams action = do
     let DirectChainConfig{networkId, nodeSocket} = chainConfig
-    globals <- newGlobals =<< queryGenesisParameters networkId nodeSocket QueryTip
+    let cardanoClient = mkCardanoClientOnline networkId nodeSocket
+    globals <- newGlobals =<< queryGenesisParametersClientOnline cardanoClient queryTypeTip
     let ledgerEnv = newLedgerEnv protocolParams
     action (Ledger.cardanoLedger globals ledgerEnv)
 

@@ -13,16 +13,11 @@ import Cardano.Ledger.Core (PParams)
 import CardanoClient (
   QueryPoint (QueryTip),
   SubmitTransactionException,
-  awaitTransaction,
   buildAddress,
-  buildTransaction,
-  queryUTxO,
-  queryUTxOFor,
   sign,
-  submitTransaction,
-  waitForPayment,
+  waitForPayment, CardanoClient (queryUTxOClientOnline, queryUTxOForClientOnline, CardanoClientOnline, submitTransactionClientOnline, awaitTransactionClientOnline, buildTransactionClientOnline, networkIdClientOnline), QueryType (queryTypeTip),
  )
-import CardanoNode (RunningNode (..))
+import CardanoNode (RunningNode)
 import Control.Exception (IOException)
 import Control.Monad.Class.MonadThrow (Handler (Handler), catches)
 import Control.Tracer (Tracer, traceWith)
@@ -58,20 +53,20 @@ seedFromFaucet ::
   Lovelace ->
   Tracer IO FaucetLog ->
   IO UTxO
-seedFromFaucet node@RunningNode{networkId, nodeSocket} receivingVerificationKey lovelace tracer = do
+seedFromFaucet cardanoClient@CardanoClientOnline{networkIdClientOnline} receivingVerificationKey lovelace tracer = do
   (faucetVk, faucetSk) <- keysFor Faucet
   retryOnExceptions tracer $ submitSeedTx faucetVk faucetSk
-  waitForPayment networkId nodeSocket lovelace receivingAddress
+  waitForPayment cardanoClient lovelace receivingAddress
  where
   submitSeedTx faucetVk faucetSk = do
-    faucetUTxO <- findFaucetUTxO node lovelace
-    let changeAddress = ShelleyAddressInEra (buildAddress faucetVk networkId)
-    buildTransaction networkId nodeSocket changeAddress faucetUTxO [] [theOutput] >>= \case
+    faucetUTxO <- findFaucetUTxO cardanoClient lovelace
+    let changeAddress = ShelleyAddressInEra (buildAddress faucetVk networkIdClientOnline)
+    buildTransactionClientOnline cardanoClient changeAddress faucetUTxO [] [theOutput] >>= \case
       Left e -> throwIO $ FaucetFailedToBuildTx{reason = e}
       Right body -> do
-        submitTransaction networkId nodeSocket (sign faucetSk body)
+        submitTransactionClientOnline cardanoClient (sign faucetSk body)
 
-  receivingAddress = buildAddress receivingVerificationKey networkId
+  receivingAddress = buildAddress receivingVerificationKey networkIdClientOnline
 
   theOutput =
     TxOut
@@ -81,9 +76,9 @@ seedFromFaucet node@RunningNode{networkId, nodeSocket} receivingVerificationKey 
       ReferenceScriptNone
 
 findFaucetUTxO :: RunningNode -> Lovelace -> IO UTxO
-findFaucetUTxO RunningNode{networkId, nodeSocket} lovelace = do
+findFaucetUTxO cardanoClient@CardanoClientOnline{networkIdClientOnline} lovelace = do
   (faucetVk, _) <- keysFor Faucet
-  faucetUTxO <- queryUTxO networkId nodeSocket QueryTip [buildAddress faucetVk networkId]
+  faucetUTxO <- queryUTxOClientOnline cardanoClient queryTypeTip [buildAddress faucetVk networkIdClientOnline]
   let foundUTxO = UTxO.filter (\o -> txOutLovelace o >= lovelace) faucetUTxO
   when (null foundUTxO) $
     throwIO $
@@ -108,12 +103,12 @@ returnFundsToFaucet ::
   RunningNode ->
   Actor ->
   IO ()
-returnFundsToFaucet tracer node@RunningNode{networkId, nodeSocket} sender = do
+returnFundsToFaucet tracer cardanoClient@CardanoClientOnline{networkIdClientOnline} sender = do
   (faucetVk, _) <- keysFor Faucet
-  let faucetAddress = mkVkAddress networkId faucetVk
+  let faucetAddress = mkVkAddress networkIdClientOnline faucetVk
 
   (senderVk, senderSk) <- keysFor sender
-  utxo <- queryUTxOFor networkId nodeSocket QueryTip senderVk
+  utxo <- queryUTxOForClientOnline cardanoClient QueryTip senderVk
 
   retryOnExceptions tracer $ do
     let utxoValue = balance @Tx utxo
@@ -122,16 +117,16 @@ returnFundsToFaucet tracer node@RunningNode{networkId, nodeSocket} sender = do
     let otherTokens = filterValue (/= AdaAssetId) utxoValue
     -- XXX: Using a hard-coded high-enough value to satisfy the min utxo value.
     -- NOTE: We use the faucet address as the change deliberately here.
-    fee <- calculateTxFee node senderSk utxo faucetAddress 1_000_000
+    fee <- calculateTxFee cardanoClient senderSk utxo faucetAddress 1_000_000
     let returnBalance = allLovelace - fee
     tx <- sign senderSk <$> buildTxBody utxo faucetAddress returnBalance otherTokens
-    submitTransaction networkId nodeSocket tx
-    void $ awaitTransaction networkId nodeSocket tx
+    submitTransactionClientOnline cardanoClient tx
+    void $ awaitTransactionClientOnline cardanoClient tx
     traceWith tracer $ ReturnedFunds{actor = actorName sender, returnAmount = returnBalance}
  where
   buildTxBody utxo faucetAddress lovelace otherTokens =
     let theOutput = TxOut faucetAddress (lovelaceToValue lovelace <> negateValue otherTokens) TxOutDatumNone ReferenceScriptNone
-     in buildTransaction networkId nodeSocket faucetAddress utxo [] [theOutput] >>= \case
+     in buildTransactionClientOnline cardanoClient faucetAddress utxo [] [theOutput] >>= \case
           Left e -> throwIO $ FaucetFailedToBuildTx{reason = e}
           Right body -> pure body
 
@@ -142,14 +137,13 @@ createOutputAtAddress ::
   AddressInEra ->
   TxOutDatum CtxTx ->
   IO (TxIn, TxOut CtxUTxO)
-createOutputAtAddress node@RunningNode{networkId, nodeSocket} pparams atAddress datum = do
+createOutputAtAddress cardanoClient@CardanoClientOnline{networkIdClientOnline} pparams atAddress datum = do
   (faucetVk, faucetSk) <- keysFor Faucet
   -- we don't care which faucet utxo we use here so just pass lovelace 0 to grab
   -- any present utxo
-  utxo <- findFaucetUTxO node 0
-  buildTransaction
-    networkId
-    nodeSocket
+  utxo <- findFaucetUTxO cardanoClient 0
+  buildTransactionClientOnline
+    cardanoClient
     (changeAddress faucetVk)
     utxo
     collateralTxIns
@@ -159,8 +153,8 @@ createOutputAtAddress node@RunningNode{networkId, nodeSocket} pparams atAddress 
         throwErrorAsException e
       Right body -> do
         let tx = makeSignedTransaction [makeShelleyKeyWitness body (WitnessPaymentKey faucetSk)] body
-        submitTransaction networkId nodeSocket tx
-        newUtxo <- awaitTransaction networkId nodeSocket tx
+        submitTransactionClientOnline cardanoClient tx
+        newUtxo <- awaitTransactionClientOnline cardanoClient tx
         case UTxO.find (\out -> txOutAddress out == atAddress) newUtxo of
           Nothing -> failure $ "Could not find script output: " <> decodeUtf8 (encodePretty newUtxo)
           Just u -> pure u
@@ -175,7 +169,7 @@ createOutputAtAddress node@RunningNode{networkId, nodeSocket} pparams atAddress 
       datum
       ReferenceScriptNone
 
-  changeAddress = mkVkAddress networkId
+  changeAddress = mkVkAddress networkIdClientOnline
 
 -- | Build and sign tx and return the calculated fee.
 -- - Signing key should be the key of a sender
@@ -188,9 +182,9 @@ calculateTxFee ::
   AddressInEra ->
   Lovelace ->
   IO Lovelace
-calculateTxFee RunningNode{networkId, nodeSocket} secretKey utxo addr lovelace =
+calculateTxFee cardanoClient secretKey utxo addr lovelace =
   let theOutput = TxOut addr (lovelaceToValue lovelace) TxOutDatumNone ReferenceScriptNone
-   in buildTransaction networkId nodeSocket addr utxo [] [theOutput] >>= \case
+   in buildTransactionClientOnline cardanoClient addr utxo [] [theOutput] >>= \case
         Left e -> throwIO $ FaucetFailedToBuildTx{reason = e}
         Right body -> pure $ txFee' (sign secretKey body)
 
@@ -220,6 +214,6 @@ retryOnExceptions tracer action =
 -- The key of the given Actor is used to pay for fees in required transactions,
 -- it is expected to have sufficient funds.
 publishHydraScriptsAs :: RunningNode -> Actor -> IO TxId
-publishHydraScriptsAs RunningNode{networkId, nodeSocket} actor = do
+publishHydraScriptsAs cardanoClient actor = do
   (_, sk) <- keysFor actor
-  publishHydraScripts networkId nodeSocket sk
+  publishHydraScripts cardanoClient sk

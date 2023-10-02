@@ -3,7 +3,7 @@ module Test.CardanoClientSpec where
 import Hydra.Prelude
 import Test.Hydra.Prelude
 
-import CardanoClient (QueryPoint (..), queryGenesisParameters)
+import CardanoClient (QueryPoint (..), queryGenesisParametersClientOnline, QueryType(..))
 import CardanoNode (RunningNode (..), withCardanoNodeDevnet)
 import Data.Aeson ((.:))
 import qualified Data.Aeson as Aeson
@@ -22,9 +22,9 @@ spec =
           -- This uses the hydra-cluster/config/devnet and updates the
           -- systemStart to some current time making it the perfect target to
           -- test against.
-          withCardanoNodeDevnet tracer tmpDir $ \RunningNode{nodeSocket, networkId} -> do
+          withCardanoNodeDevnet tracer tmpDir $ \cardanoClient -> do
             GenesisParameters{protocolParamSystemStart = queriedSystemStart} <-
-              queryGenesisParameters networkId nodeSocket QueryTip
+              queryGenesisParametersClientOnline cardanoClient queryTypeTip
 
             let parseSystemStart =
                   Aeson.withObject "GenesisShelley" $ \o -> o .: "systemStart"

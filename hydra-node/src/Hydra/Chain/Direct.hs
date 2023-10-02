@@ -60,8 +60,8 @@ import Hydra.Chain.CardanoClient (
   queryEraHistory,
   queryProtocolParameters,
   querySystemStart,
-  queryTip,
-  queryUTxO,
+  -- queryTip,
+  queryUTxO, mkCardanoClientOnline, IsCardanoClient (..),
  )
 import Hydra.Chain.Direct.Handlers (
   ChainSyncHandler,
@@ -117,7 +117,7 @@ loadChainContext ::
 loadChainContext config party otherParties hydraScriptsTxId = do
   (vk, _) <- readKeyPair cardanoSigningKey
   otherCardanoKeys <- mapM readVerificationKey cardanoVerificationKeys
-  scriptRegistry <- queryScriptRegistry networkId nodeSocket hydraScriptsTxId
+  scriptRegistry <- queryScriptRegistry cardanoClient hydraScriptsTxId
   pure $
     ChainContext
       { networkId
@@ -129,6 +129,8 @@ loadChainContext config party otherParties hydraScriptsTxId = do
       , contestationPeriod
       }
  where
+  --FIXME(Elaine)
+  cardanoClient = mkCardanoClientOnline networkId nodeSocket
   DirectChainConfig
     { networkId
     , nodeSocket
@@ -146,13 +148,14 @@ mkTinyWallet tracer config = do
   newTinyWallet (contramap Wallet tracer) networkId keyPair queryWalletInfo queryEpochInfo
  where
   DirectChainConfig{networkId, nodeSocket, cardanoSigningKey} = config
+  cardanoClient = mkCardanoClientOnline networkId nodeSocket
 
   queryEpochInfo = toEpochInfo <$> queryEraHistory networkId nodeSocket QueryTip
 
   queryWalletInfo queryPoint address = do
     point <- case queryPoint of
       QueryAt point -> pure point
-      QueryTip -> queryTip networkId nodeSocket
+      QueryTip -> queryTipClient cardanoClient
     walletUTxO <- Ledger.unUTxO . toLedgerUTxO <$> queryUTxO networkId nodeSocket QueryTip [address]
     pparams <- queryProtocolParameters networkId nodeSocket QueryTip
     systemStart <- querySystemStart networkId nodeSocket QueryTip
@@ -177,12 +180,12 @@ withDirectChain tracer config ctx wallet chainStateHistory callback action = do
   let persistedPoint = recordedAt (currentState chainStateHistory)
   queue <- newTQueueIO
   -- Select a chain point from which to start synchronizing
-  chainPoint <- maybe (queryTip networkId nodeSocket) pure $ do
+  chainPoint <- maybe (queryTipClient cardanoClient) pure $ do
     (min <$> startChainFrom <*> persistedPoint)
       <|> persistedPoint
       <|> startChainFrom
 
-  let getTimeHandle = queryTimeHandle networkId nodeSocket
+  let getTimeHandle = queryTimeHandle cardanoClient
   localChainState <- newLocalChainState chainStateHistory
 
   let chainHandle =
@@ -207,6 +210,7 @@ withDirectChain tracer config ctx wallet chainStateHistory callback action = do
     Left () -> error "'connectTo' cannot terminate but did?"
     Right a -> pure a
  where
+  cardanoClient = mkCardanoClientOnline networkId nodeSocket
   DirectChainConfig{networkId, nodeSocket, startChainFrom} = config
 
   connectInfo =

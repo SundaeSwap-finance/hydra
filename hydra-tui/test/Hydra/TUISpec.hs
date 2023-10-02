@@ -47,6 +47,8 @@ import HydraNode (EndToEndLog, HydraClient (HydraClient, hydraNodeId), withHydra
 import System.FilePath ((</>))
 import System.Posix (OpenMode (WriteOnly), closeFd, defaultFileFlags, openFd)
 
+import Hydra.Chain.CardanoClient (CardanoClient (..), ClientMode (..))
+
 tuiContestationPeriod :: ContestationPeriod
 tuiContestationPeriod = UnsafeContestationPeriod 10
 
@@ -176,9 +178,9 @@ setupNodeAndTUI' lovelace action =
   showLogsOnFailure $ \tracer ->
     withTempDir "tui-end-to-end" $ \tmpDir -> do
       (aliceCardanoVk, _) <- keysFor Alice
-      withCardanoNodeDevnet (contramap FromCardano tracer) tmpDir $ \node@RunningNode{nodeSocket, networkId} -> do
-        hydraScriptsTxId <- publishHydraScriptsAs node Faucet
-        chainConfig <- chainConfigFor Alice tmpDir nodeSocket [] tuiContestationPeriod
+      withCardanoNodeDevnet (contramap FromCardano tracer) tmpDir $ \cardanoClient -> do
+        hydraScriptsTxId <- publishHydraScriptsAs cardanoClient Faucet
+        chainConfig <- chainConfigFor Alice tmpDir cardanoClient [] tuiContestationPeriod
         -- XXX(SN): API port id is inferred from nodeId, in this case 4001
         let nodeId = 1
 
@@ -188,10 +190,10 @@ setupNodeAndTUI' lovelace action =
 
         let externalVKey = getVerificationKey externalSKey
         -- Some ADA to commit
-        seedFromFaucet_ node externalVKey 42_000_000 (contramap FromFaucet tracer)
+        seedFromFaucet_ cardanoClient externalVKey 42_000_000 (contramap FromFaucet tracer)
 
         withHydraNode (contramap FromHydra tracer) chainConfig tmpDir nodeId aliceSk [] [nodeId] hydraScriptsTxId $ \HydraClient{hydraNodeId} -> do
-          seedFromFaucet_ node aliceCardanoVk lovelace (contramap FromFaucet tracer)
+          seedFromFaucet_ cardanoClient aliceCardanoVk lovelace (contramap FromFaucet tracer)
 
           withTUITest (150, 10) $ \brickTest@TUITest{buildVty} -> do
             race_
@@ -204,9 +206,10 @@ setupNodeAndTUI' lovelace action =
                           , port = fromIntegral $ 4000 + hydraNodeId
                           }
                     , cardanoNodeSocket =
-                        nodeSocket
+                        --FIXME(Elaine)
+                        (nodeSocketClientOnline cardanoClient)
                     , cardanoNetworkId =
-                        networkId
+                        (networkIdClientOnline cardanoClient)
                     , cardanoSigningKey = externalKeyFilePath
                     }
               )

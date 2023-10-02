@@ -44,6 +44,7 @@ import System.Process (
  )
 import Test.Hydra.Prelude (checkProcessHasNotDied, failAfter, failure, withLogFile)
 import qualified Prelude
+import Hydra.Chain.CardanoClient (CardanoClient (nodeSocketClientOnline), ClientMode (..))
 
 data HydraClient = HydraClient
   { hydraNodeId :: Int
@@ -217,7 +218,7 @@ withHydraCluster ::
   HasCallStack =>
   Tracer IO EndToEndLog ->
   FilePath ->
-  SocketPath ->
+  CardanoClient 'ClientOnline ->
   -- | First node id
   -- This sets the starting point for assigning ports
   Int ->
@@ -229,7 +230,7 @@ withHydraCluster ::
   ContestationPeriod ->
   (NonEmpty HydraClient -> IO a) ->
   IO a
-withHydraCluster tracer workDir nodeSocket firstNodeId allKeys hydraKeys hydraScriptsTxId contestationPeriod action = do
+withHydraCluster tracer workDir cardanoClient firstNodeId allKeys hydraKeys hydraScriptsTxId contestationPeriod action = do
   when (clusterSize == 0) $
     failure "Cannot run a cluster with 0 number of nodes"
   when (length allKeys /= length hydraKeys) $
@@ -253,8 +254,9 @@ withHydraCluster tracer workDir nodeSocket firstNodeId allKeys hydraKeys hydraSc
           cardanoVerificationKeys = [workDir </> show i <.> "vk" | i <- allNodeIds, i /= nodeId]
           cardanoSigningKey = workDir </> show nodeId <.> "sk"
           chainConfig =
+            --FIXME(Elaine)
             defaultChainConfig
-              { nodeSocket
+              { nodeSocket = nodeSocketClientOnline cardanoClient
               , cardanoSigningKey
               , cardanoVerificationKeys
               , contestationPeriod

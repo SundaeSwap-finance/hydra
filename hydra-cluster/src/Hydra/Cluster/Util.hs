@@ -11,7 +11,6 @@ import Hydra.Cardano.Api (
   Key (VerificationKey, getVerificationKey),
   PaymentKey,
   SigningKey,
-  SocketPath,
   TextEnvelopeError (TextEnvelopeAesonDecodeError),
   deserialiseFromTextEnvelope,
   textEnvelopeToJSON,
@@ -24,6 +23,7 @@ import qualified Paths_hydra_cluster as Pkg
 import System.FilePath ((<.>), (</>))
 import Test.Hydra.Prelude (failure)
 import Test.QuickCheck (generate)
+import Hydra.Chain.CardanoClient (CardanoClient (nodeSocketClientOnline), ClientMode (..))
 
 -- | Lookup a config file similar reading a file from disk.
 -- If the env variable `HYDRA_CONFIG_DIR` is set, filenames will be
@@ -59,8 +59,8 @@ createAndSaveSigningKey path = do
   writeFileLBS path $ textEnvelopeToJSON (Just "Key used to commit funds into a Head") sk
   pure sk
 
-chainConfigFor :: HasCallStack => Actor -> FilePath -> SocketPath -> [Actor] -> ContestationPeriod -> IO ChainConfig
-chainConfigFor me targetDir nodeSocket them cp = do
+chainConfigFor :: HasCallStack => Actor -> FilePath -> CardanoClient 'ClientOnline -> [Actor] -> ContestationPeriod -> IO ChainConfig
+chainConfigFor me targetDir cardanoClient them cp = do
   when (me `elem` them) $
     failure $
       show me <> " must not be in " <> show them
@@ -70,7 +70,7 @@ chainConfigFor me targetDir nodeSocket them cp = do
     readConfigFile ("credentials" </> vkName actor) >>= writeFileBS (vkTarget actor)
   pure $
     defaultChainConfig
-      { nodeSocket
+      { nodeSocket = nodeSocketClientOnline cardanoClient
       , cardanoSigningKey = skTarget me
       , cardanoVerificationKeys = [vkTarget himOrHer | himOrHer <- them]
       , contestationPeriod = cp

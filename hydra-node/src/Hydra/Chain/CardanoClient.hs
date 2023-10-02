@@ -1,4 +1,3 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
@@ -13,6 +12,10 @@ module Hydra.Chain.CardanoClient (
   ClientMode (..),
   modeTag,
   mkCardanoClientOnline,
+
+  -- * Querying
+  QueryType (..),
+
   -- * Tx Construction / Submission
   buildTransaction,
   submitTransaction,
@@ -20,7 +23,7 @@ module Hydra.Chain.CardanoClient (
   awaitTransaction,
   -- * Local state query
   QueryPoint (..),
-  queryTip,
+  -- queryTip,
   queryTipSlotNo,
   querySystemStart,
   queryEraHistory,
@@ -74,8 +77,17 @@ instance Exception QueryException
 -- draft with type families (+ gadt)
 -- this can be opened up by removing the equality constraint with the CardanoClient GADT
 
+--TODO(Elaine): QueryAt constructor stopped being used in 8967f3544f3d9c3a1566ee4fe0d7d2d003c1349e as part of #621
+-- so we probably don't need this in the first place, but it's included to make offline mode (which only queries tip) not blocked on removal
+class QueryType q where
+  queryTypeTip :: q
+
+instance QueryType QueryPoint where
+  queryTypeTip = QueryTip
+
 class
   ( IsTx (TxType mode)
+  , QueryType (QueryType' mode)
   , Typeable mode
   , CardanoClientType mode ~ CardanoClient mode
   ) => IsCardanoClient (mode :: ClientMode) where
@@ -88,17 +100,19 @@ class
   type TxType mode :: Type
 
   -- QueryPoint generalization
-  type QueryType mode :: Type
+  -- planned so that offlinemode can focus support on querying tip
+  type QueryType' mode :: Type
 
 
   -- these are all the methods that are common to both online and offline mode
   --TODO(ELAINE): rename this, but this should be how to call the methods on the client
   submitTransactionClient :: CardanoClientType mode -> TxType mode -> IO ()
-  queryTipClient :: CardanoClientType mode -> IO ChainTip
-  querySystemStartClient :: CardanoClientType mode -> QueryType mode -> IO SystemStart
-  queryEraHistoryClient :: CardanoClientType mode -> QueryType mode -> IO (EraHistory CardanoMode)
-  queryProtocolParametersClient :: CardanoClientType mode -> QueryType mode -> IO (PParams LedgerEra)
-  queryGenesisParametersClient :: CardanoClientType mode -> QueryType mode -> IO (GenesisParameters ShelleyEra)
+
+  queryTipClient :: CardanoClientType mode -> IO ChainPoint
+  querySystemStartClient :: CardanoClientType mode -> QueryType' mode -> IO SystemStart
+  queryEraHistoryClient :: CardanoClientType mode -> QueryType' mode -> IO (EraHistory CardanoMode)
+  queryProtocolParametersClient :: CardanoClientType mode -> QueryType' mode -> IO (PParams LedgerEra)
+  queryGenesisParametersClient :: CardanoClientType mode -> QueryType' mode -> IO (GenesisParameters ShelleyEra)
 
 
 --draft with data families (precluding gadt)
@@ -178,7 +192,7 @@ data CardanoClient (mode :: ClientMode) where
         buildTransactionClientOnline :: AddressInEra -> UTxO -> [TxIn] -> [TxOut CtxTx] -> IO (Either TxBodyErrorAutoBalance TxBody)
       , submitTransactionClientOnline :: Tx -> IO ()
       , awaitTransactionClientOnline :: Tx -> IO UTxO
-      , queryTipClientOnline :: IO ChainTip -- TODO(ELAINE): would it be possible to dedup this with that record that queries for current slot etc
+      , queryTipClientOnline :: IO ChainPoint -- TODO(ELAINE): would it be possible to dedup this with that record that queries for current slot etc
       -- , queryGlobals :: IO Globals
       , querySystemStartClientOnline :: QueryPoint -> IO SystemStart
       , queryEraHistoryClientOnline :: QueryPoint -> IO (EraHistory CardanoMode)
@@ -189,9 +203,12 @@ data CardanoClient (mode :: ClientMode) where
       , queryUTxOWholeClientOnline :: QueryPoint -> IO UTxO
       , queryUTxOForClientOnline :: QueryPoint -> VerificationKey PaymentKey -> IO UTxO
       , queryStakePoolsClientOnline :: QueryPoint -> IO (Set PoolId)
+      
       , networkIdClientOnline :: NetworkId
+      , nodeSocketClientOnline :: SocketPath
       
       , queryUTxOByAddressClientOnline :: [Address ShelleyAddr] -> IO UTxO
+    
     } -> CardanoClient 'ClientOnline
 
 mkCardanoClientOnline :: NetworkId -> SocketPath -> CardanoClient 'ClientOnline
@@ -202,7 +219,7 @@ mkCardanoClientOnline networkId nodeSocket =
     , submitTransactionClientOnline = submitTransaction networkId nodeSocket
     , awaitTransactionClientOnline = awaitTransaction networkId nodeSocket
     -- | NOTE: different type from the old one
-    , queryTipClientOnline = getLocalChainTip (localNodeConnectInfo networkId nodeSocket)
+    , queryTipClientOnline = queryTip networkId nodeSocket-- getLocalChainTip (localNodeConnectInfo networkId nodeSocket)
     -- , queryGlobals = HydraLedger.newGlobals =<< queryGenesisParameters networkId nodeSocket QueryTip
     , querySystemStartClientOnline = querySystemStart networkId nodeSocket
     , queryEraHistoryClientOnline = queryEraHistory networkId nodeSocket
@@ -213,15 +230,19 @@ mkCardanoClientOnline networkId nodeSocket =
     , queryUTxOWholeClientOnline = queryUTxOWhole networkId nodeSocket
     , queryUTxOForClientOnline = queryUTxOFor networkId nodeSocket
     , queryStakePoolsClientOnline = queryStakePools networkId nodeSocket
+
     , networkIdClientOnline = networkId
+    , nodeSocketClientOnline = nodeSocket
     
     , queryUTxOByAddressClientOnline = queryUTxO networkId nodeSocket QueryTip
+
+    
     }
 
 
 instance IsCardanoClient 'ClientOnline where
   type TxType 'ClientOnline = Tx
-  type QueryType 'ClientOnline = QueryPoint
+  type QueryType' 'ClientOnline = QueryPoint
 
   submitTransactionClient = submitTransactionClientOnline
   queryTipClient = queryTipClientOnline
@@ -453,11 +474,16 @@ queryTip networkId socket =
   chainTipToChainPoint <$> getLocalChainTip (localNodeConnectInfo networkId socket)
 
 -- | Query the latest chain point just for the slot number.
-queryTipSlotNo :: NetworkId -> SocketPath -> IO SlotNo
-queryTipSlotNo networkId socket =
-  getLocalChainTip (localNodeConnectInfo networkId socket) >>= \case
-    ChainTipAtGenesis -> pure 0
-    ChainTip slotNo _ _ -> pure slotNo
+queryTipSlotNo :: IsCardanoClient mode => CardanoClient mode -> IO SlotNo
+queryTipSlotNo cardanoClient =
+  queryTipClient cardanoClient >>= \case
+    ChainPointAtGenesis -> pure 0
+    ChainPoint slotNo _ -> pure slotNo
+-- queryTipSlotNo :: NetworkId -> SocketPath -> IO SlotNo
+-- queryTipSlotNo networkId socket =
+--   getLocalChainTip (localNodeConnectInfo networkId socket) >>= \case
+--     ChainTipAtGenesis -> pure 0
+--     ChainTip slotNo _ _ -> pure slotNo
 
 -- | Query the system start parameter at given point.
 --

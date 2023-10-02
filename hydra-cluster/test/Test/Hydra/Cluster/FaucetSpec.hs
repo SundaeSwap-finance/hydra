@@ -7,7 +7,7 @@ import CardanoNode (RunningNode (..), withCardanoNodeDevnet)
 import Control.Concurrent.Async (replicateConcurrently_)
 import Hydra.Cardano.Api (AssetId (AdaAssetId), txOutValue)
 import Hydra.Cardano.Api.Prelude (selectAsset)
-import Hydra.Chain.CardanoClient (QueryPoint (..), queryUTxOFor)
+import Hydra.Chain.CardanoClient (QueryPoint (..), CardanoClient(..), ClientMode(..), QueryType(..))
 import Hydra.Cluster.Faucet (returnFundsToFaucet, seedFromFaucet, seedFromFaucet_)
 import Hydra.Cluster.Fixture (Actor (..))
 import Hydra.Cluster.Util (keysFor)
@@ -32,16 +32,16 @@ spec = do
     it "seedFromFaucet and returnFundsToFaucet work together" $ do
       showLogsOnFailure $ \tracer ->
         withTempDir "end-to-end-cardano-node" $ \tmpDir ->
-          withCardanoNodeDevnet (contramap FromCardanoNode tracer) tmpDir $ \node@RunningNode{networkId, nodeSocket} -> do
+          withCardanoNodeDevnet (contramap FromCardanoNode tracer) tmpDir $ \cardanoClient-> do
             let faucetTracer = contramap FromFaucet tracer
             actor <- generate $ elements [Alice, Bob, Carol]
             (vk, _) <- keysFor actor
             (faucetVk, _) <- keysFor Faucet
-            initialFaucetFunds <- queryUTxOFor networkId nodeSocket QueryTip faucetVk
-            seeded <- seedFromFaucet node vk 100_000_000 faucetTracer
-            returnFundsToFaucet faucetTracer node actor
-            remaining <- queryUTxOFor networkId nodeSocket QueryTip vk
-            finalFaucetFunds <- queryUTxOFor networkId nodeSocket QueryTip faucetVk
+            initialFaucetFunds <- queryUTxOForClientOnline cardanoClient queryTypeTip faucetVk
+            seeded <- seedFromFaucet cardanoClient vk 100_000_000 faucetTracer
+            returnFundsToFaucet faucetTracer cardanoClient actor
+            remaining <- queryUTxOForClientOnline cardanoClient queryTypeTip vk
+            finalFaucetFunds <- queryUTxOForClientOnline cardanoClient queryTypeTip faucetVk
             foldMap txOutValue remaining `shouldBe` mempty
 
             -- check the faucet has one utxo extra in the end

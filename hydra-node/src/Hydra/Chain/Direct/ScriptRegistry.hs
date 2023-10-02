@@ -47,7 +47,7 @@ import Hydra.Chain.CardanoClient (
   queryProtocolParameters,
   queryUTxOByTxIn,
   queryUTxOFor,
-  submitTransaction,
+  submitTransaction, CardanoClient (awaitTransactionClientOnline, queryProtocolParametersClientOnline, queryUTxOForClientOnline, buildTransactionClientOnline, submitTransactionClientOnline, CardanoClientOnline, networkIdClientOnline, queryUTxOByTxInClientOnline), ClientMode (..), QueryType (queryTypeTip),
  )
 import Hydra.Contract (ScriptInfo (..), scriptInfo)
 import qualified Hydra.Contract.Commit as Commit
@@ -158,12 +158,11 @@ registryUTxO scriptRegistry =
 -- Can throw at least 'NewScriptRegistryException' on failure.
 queryScriptRegistry ::
   (MonadIO m, MonadThrow m) =>
-  NetworkId ->
-  SocketPath ->
+  CardanoClient 'ClientOnline ->
   TxId ->
   m ScriptRegistry
-queryScriptRegistry networkId socketPath txId = do
-  utxo <- liftIO $ queryUTxOByTxIn networkId socketPath QueryTip candidates
+queryScriptRegistry cardanoClient txId = do
+  utxo <- liftIO $ queryUTxOByTxInClientOnline cardanoClient queryTypeTip candidates
   case newScriptRegistry utxo of
     Left e -> throwIO e
     Right sr -> pure sr
@@ -171,16 +170,14 @@ queryScriptRegistry networkId socketPath txId = do
   candidates = [TxIn txId ix | ix <- [TxIx 0 .. TxIx 10]] -- Arbitrary but, high-enough.
 
 publishHydraScripts ::
-  -- | Expected network discriminant.
-  NetworkId ->
-  -- | Path to the cardano-node's domain socket
-  SocketPath ->
+  -- | Cardano session to use.
+  CardanoClient 'ClientOnline ->
   -- | Keys assumed to hold funds to pay for the publishing transaction.
   SigningKey PaymentKey ->
   IO TxId
-publishHydraScripts networkId socketPath sk = do
-  pparams <- queryProtocolParameters networkId socketPath QueryTip
-  utxo <- queryUTxOFor networkId socketPath QueryTip vk
+publishHydraScripts cardanoClient@CardanoClientOnline{networkIdClientOnline} sk = do
+  pparams <- queryProtocolParametersClientOnline cardanoClient QueryTip
+  utxo <- queryUTxOForClientOnline cardanoClient queryTypeTip vk
   let outputs =
         mkScriptTxOut pparams
           <$> [ Initial.validatorScript
@@ -191,9 +188,8 @@ publishHydraScripts networkId socketPath sk = do
       someUTxO =
         maybe mempty UTxO.singleton $
           UTxO.find (\o -> selectLovelace (txOutValue o) > totalDeposit) utxo
-  buildTransaction
-    networkId
-    socketPath
+  buildTransactionClientOnline
+    cardanoClient
     changeAddress
     someUTxO
     []
@@ -203,13 +199,13 @@ publishHydraScripts networkId socketPath sk = do
         throwErrorAsException e
       Right body -> do
         let tx = makeSignedTransaction [makeShelleyKeyWitness body (WitnessPaymentKey sk)] body
-        submitTransaction networkId socketPath tx
-        void $ awaitTransaction networkId socketPath tx
+        submitTransactionClientOnline cardanoClient tx
+        void $ awaitTransactionClientOnline cardanoClient tx
         return $ getTxId body
  where
   vk = getVerificationKey sk
 
-  changeAddress = mkVkAddress networkId vk
+  changeAddress = mkVkAddress networkIdClientOnline vk
 
   mkScriptTxOut pparams script =
     mkTxOutAutoBalance
@@ -220,4 +216,4 @@ publishHydraScripts networkId socketPath sk = do
       (mkScriptRef script)
 
   unspendableScriptAddress =
-    mkScriptAddress networkId $ examplePlutusScriptAlwaysFails WitCtxTxIn
+    mkScriptAddress networkIdClientOnline $ examplePlutusScriptAlwaysFails WitCtxTxIn

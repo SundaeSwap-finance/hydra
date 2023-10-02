@@ -12,11 +12,9 @@ import CardanoClient (
   QueryPoint (QueryTip),
   buildTransaction,
   queryProtocolParameters,
-  queryTip,
-  queryUTxOFor,
   submitTx,
  )
-import CardanoNode (RunningNode (..))
+import CardanoNode (RunningNode)
 import Control.Lens ((^?))
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Lens (key, _JSON)
@@ -82,21 +80,23 @@ import Network.HTTP.Req (
 import qualified PlutusLedgerApi.Test.Examples as Plutus
 import Test.Hspec.Expectations (shouldBe, shouldReturn, shouldThrow)
 import Test.QuickCheck (generate)
+import Hydra.Chain.CardanoClient (QueryType(..), CardanoClient (..))
 
 restartedNodeCanObserveCommitTx :: Tracer IO EndToEndLog -> FilePath -> RunningNode -> TxId -> IO ()
-restartedNodeCanObserveCommitTx tracer workDir cardanoNode hydraScriptsTxId = do
+restartedNodeCanObserveCommitTx tracer workDir cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} hydraScriptsTxId = do
   let clients = [Alice, Bob]
   [(aliceCardanoVk, _), (bobCardanoVk, _)] <- forM clients keysFor
-  seedFromFaucet_ cardanoNode aliceCardanoVk 100_000_000 (contramap FromFaucet tracer)
-  seedFromFaucet_ cardanoNode bobCardanoVk 100_000_000 (contramap FromFaucet tracer)
+  seedFromFaucet_ cardanoClient aliceCardanoVk 100_000_000 (contramap FromFaucet tracer)
+  seedFromFaucet_ cardanoClient bobCardanoVk 100_000_000 (contramap FromFaucet tracer)
 
   let contestationPeriod = UnsafeContestationPeriod 1
   aliceChainConfig <-
-    chainConfigFor Alice workDir nodeSocket [Bob] contestationPeriod
+    --FIXME(Elaine): get rid of socket in ChainConfig too
+    chainConfigFor Alice workDir cardanoClient [Bob] contestationPeriod
       <&> \config -> (config :: ChainConfig){networkId}
 
   bobChainConfig <-
-    chainConfigFor Bob workDir nodeSocket [Alice] contestationPeriod
+    chainConfigFor Bob workDir cardanoClient [Alice] contestationPeriod
       <&> \config -> (config :: ChainConfig){networkId}
 
   withHydraNode tracer bobChainConfig workDir 1 bobSk [aliceVk] [1, 2] hydraScriptsTxId $ \n1 -> do
@@ -106,7 +106,7 @@ restartedNodeCanObserveCommitTx tracer workDir cardanoNode hydraScriptsTxId = do
       waitForAllMatch 10 [n1, n2] $ headIsInitializingWith (Set.fromList [alice, bob])
 
     -- n1 does a commit while n2 is down
-    requestCommitTx n1 mempty >>= submitTx cardanoNode
+    requestCommitTx n1 mempty >>= submitTx cardanoClient
     waitFor tracer 10 [n1] $
       output "Committed" ["party" .= bob, "utxo" .= object mempty, "headId" .= headId]
 
@@ -114,15 +114,14 @@ restartedNodeCanObserveCommitTx tracer workDir cardanoNode hydraScriptsTxId = do
     withHydraNode tracer aliceChainConfig workDir 2 aliceSk [bobVk] [1, 2] hydraScriptsTxId $ \n2 -> do
       waitFor tracer 10 [n2] $
         output "Committed" ["party" .= bob, "utxo" .= object mempty, "headId" .= headId]
- where
-  RunningNode{nodeSocket, networkId} = cardanoNode
 
 restartedNodeCanAbort :: Tracer IO EndToEndLog -> FilePath -> RunningNode -> TxId -> IO ()
-restartedNodeCanAbort tracer workDir cardanoNode hydraScriptsTxId = do
-  refuelIfNeeded tracer cardanoNode Alice 100_000_000
+restartedNodeCanAbort tracer workDir cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} hydraScriptsTxId = do
+  refuelIfNeeded tracer cardanoClient Alice 100_000_000
   let contestationPeriod = UnsafeContestationPeriod 2
   aliceChainConfig <-
-    chainConfigFor Alice workDir nodeSocket [] contestationPeriod
+    --FIXME(Elaine)
+    chainConfigFor Alice workDir cardanoClient[] contestationPeriod
       -- we delibelately do not start from a chain point here to highlight the
       -- need for persistence
       <&> \config -> config{networkId, startChainFrom = Nothing}
@@ -139,8 +138,6 @@ restartedNodeCanAbort tracer workDir cardanoNode hydraScriptsTxId = do
     send n1 $ input "Abort" []
     waitFor tracer 10 [n1] $
       output "HeadIsAborted" ["utxo" .= object mempty, "headId" .= headId2]
- where
-  RunningNode{nodeSocket, networkId} = cardanoNode
 
 -- | Step through the full life cycle of a Hydra Head with only a single
 -- participant. This scenario is also used by the smoke test run via the
@@ -151,21 +148,21 @@ singlePartyHeadFullLifeCycle ::
   RunningNode ->
   TxId ->
   IO ()
-singlePartyHeadFullLifeCycle tracer workDir node hydraScriptsTxId =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    -- Start hydra-node on chain tip
-    tip <- queryTip networkId nodeSocket
+singlePartyHeadFullLifeCycle tracer workDir cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} hydraScriptsTxId =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    -- Start hydra-cardanoClient on chain tip
+    tip <- queryTipClientOnline cardanoClient
     let contestationPeriod = UnsafeContestationPeriod 100
     aliceChainConfig <-
-      chainConfigFor Alice workDir nodeSocket [] contestationPeriod
+      chainConfigFor Alice workDir cardanoClient [] contestationPeriod
         <&> \config -> config{networkId, startChainFrom = Just tip}
     withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       -- Initialize & open head
       send n1 $ input "Init" []
       headId <- waitMatch 600 n1 $ headIsInitializingWith (Set.fromList [alice])
       -- Commit nothing for now
-      requestCommitTx n1 mempty >>= submitTx node
+      requestCommitTx n1 mempty >>= submitTx cardanoClient
       waitFor tracer 600 [n1] $
         output "HeadIsOpen" ["utxo" .= object mempty, "headId" .= headId]
       -- Close head
@@ -184,11 +181,9 @@ singlePartyHeadFullLifeCycle tracer workDir node hydraScriptsTxId =
         output "HeadIsFinalized" ["utxo" .= object mempty, "headId" .= headId]
     traceRemainingFunds Alice
  where
-  RunningNode{networkId, nodeSocket} = node
-
   traceRemainingFunds actor = do
     (actorVk, _) <- keysFor actor
-    utxo <- queryUTxOFor networkId nodeSocket QueryTip actorVk
+    utxo <- queryUTxOForClientOnline cardanoClient queryTypeTip actorVk
     traceWith tracer RemainingFunds{actor = actorName actor, utxo}
 
 -- | Open a Hydra Head with only a single participant but some arbitrary UTxO
@@ -201,14 +196,14 @@ singlePartyOpenAHead ::
   -- | Continuation called when the head is open
   (HydraClient -> IO ()) ->
   IO ()
-singlePartyOpenAHead tracer workDir node hydraScriptsTxId callback =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    -- Start hydra-node on chain tip
-    tip <- queryTip networkId nodeSocket
+singlePartyOpenAHead tracer workDir cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} hydraScriptsTxId callback =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    -- Start hydra-cardanoClient on chain tip
+    tip <- queryTipClientOnline cardanoClient
     let contestationPeriod = UnsafeContestationPeriod 100
     aliceChainConfig <-
-      chainConfigFor Alice workDir nodeSocket [] contestationPeriod
+      chainConfigFor Alice workDir cardanoClient [] contestationPeriod
         <&> \config -> config{networkId, startChainFrom = Just tip}
 
     (walletVk, walletSk) <- generate genKeyPair
@@ -216,20 +211,18 @@ singlePartyOpenAHead tracer workDir node hydraScriptsTxId callback =
     _ <- writeFileTextEnvelope (File keyPath) Nothing walletSk
     traceWith tracer CreatedKey{keyPath}
 
-    utxoToCommit <- seedFromFaucet node walletVk 100_000_000 (contramap FromFaucet tracer)
+    utxoToCommit <- seedFromFaucet cardanoClient walletVk 100_000_000 (contramap FromFaucet tracer)
 
     withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       -- Initialize & open head
       send n1 $ input "Init" []
       headId <- waitMatch 600 n1 $ headIsInitializingWith (Set.fromList [alice])
       -- Commit nothing for now
-      requestCommitTx n1 utxoToCommit <&> signTx walletSk >>= submitTx node
+      requestCommitTx n1 utxoToCommit <&> signTx walletSk >>= submitTx cardanoClient
       waitFor tracer 600 [n1] $
         output "HeadIsOpen" ["utxo" .= toJSON utxoToCommit, "headId" .= headId]
 
       callback n1
- where
-  RunningNode{networkId, nodeSocket} = node
 
 -- | Exercise committing a script utxo that uses inline datums.
 singlePartyCommitsExternalScriptWithInlineDatum ::
@@ -238,10 +231,10 @@ singlePartyCommitsExternalScriptWithInlineDatum ::
   RunningNode ->
   TxId ->
   IO ()
-singlePartyCommitsExternalScriptWithInlineDatum tracer workDir node hydraScriptsTxId =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    aliceChainConfig <- chainConfigFor Alice workDir nodeSocket [] $ UnsafeContestationPeriod 100
+singlePartyCommitsExternalScriptWithInlineDatum tracer workDir cardanoClient@CardanoClientOnline{nodeSocketClientOnline = cardanoClientSocket, networkIdClientOnline = networkId} hydraScriptsTxId =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    aliceChainConfig <- chainConfigFor Alice workDir cardanoClient [] $ UnsafeContestationPeriod 100
     let hydraNodeId = 1
     withHydraNode tracer aliceChainConfig workDir hydraNodeId aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       send n1 $ input "Init" []
@@ -253,8 +246,8 @@ singlePartyCommitsExternalScriptWithInlineDatum tracer workDir node hydraScripts
           reedemer = 1 :: Integer
           datum = 2 :: Integer
           scriptInfo = ScriptInfo (toScriptData reedemer) Nothing script
-      pparams <- queryProtocolParameters networkId nodeSocket QueryTip
-      (scriptTxIn, scriptTxOut) <- createOutputAtAddress node pparams scriptAddress (mkTxOutDatumInline datum)
+      pparams <- queryProtocolParameters networkId cardanoClientSocket QueryTip
+      (scriptTxIn, scriptTxOut) <- createOutputAtAddress cardanoClient pparams scriptAddress (mkTxOutDatumInline datum)
 
       -- Commit the script output using known witness
       let clientPayload =
@@ -277,16 +270,14 @@ singlePartyCommitsExternalScriptWithInlineDatum tracer workDir node hydraScripts
             (Proxy :: Proxy (JsonResponse DraftCommitTxResponse))
             (port $ 4000 + hydraNodeId)
       let DraftCommitTxResponse{commitTx} = responseBody res
-      submitTx node commitTx
+      submitTx cardanoClient commitTx
 
       lockedUTxO <- waitMatch 60 n1 $ \v -> do
         guard $ v ^? key "headId" == Just (toJSON headId)
         guard $ v ^? key "tag" == Just "HeadIsOpen"
         pure $ v ^? key "utxo"
       lockedUTxO `shouldBe` Just (toJSON $ UTxO.singleton (scriptTxIn, scriptTxOut))
- where
-  RunningNode{networkId, nodeSocket} = node
-
+      
 -- | Single hydra-node where the commit is done from an external UTxO owned by a
 -- script which requires providing script, datum and redeemer instead of
 -- signing the transaction.
@@ -296,10 +287,10 @@ singlePartyCommitsFromExternalScript ::
   RunningNode ->
   TxId ->
   IO ()
-singlePartyCommitsFromExternalScript tracer workDir node hydraScriptsTxId =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    aliceChainConfig <- chainConfigFor Alice workDir nodeSocket [] $ UnsafeContestationPeriod 100
+singlePartyCommitsFromExternalScript tracer workDir cardanoClient@CardanoClientOnline{nodeSocketClientOnline = cardanoClientSocket, networkIdClientOnline = networkId} hydraScriptsTxId =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    aliceChainConfig <- chainConfigFor Alice workDir cardanoClient [] $ UnsafeContestationPeriod 100
     let hydraNodeId = 1
     withHydraNode tracer aliceChainConfig workDir hydraNodeId aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       send n1 $ input "Init" []
@@ -311,8 +302,8 @@ singlePartyCommitsFromExternalScript tracer workDir node hydraScriptsTxId =
           reedemer = 1 :: Integer
           datum = 2 :: Integer
           scriptInfo = ScriptInfo (toScriptData reedemer) (Just $ toScriptData datum) script
-      pparams <- queryProtocolParameters networkId nodeSocket QueryTip
-      (scriptTxIn, scriptTxOut) <- createOutputAtAddress node pparams scriptAddress (mkTxOutDatumHash datum)
+      pparams <- queryProtocolParameters networkId cardanoClientSocket QueryTip
+      (scriptTxIn, scriptTxOut) <- createOutputAtAddress cardanoClient pparams scriptAddress (mkTxOutDatumHash datum)
 
       -- Commit the script output using known witness
       let clientPayload =
@@ -336,15 +327,13 @@ singlePartyCommitsFromExternalScript tracer workDir node hydraScriptsTxId =
             (port $ 4000 + hydraNodeId)
 
       let DraftCommitTxResponse{commitTx} = responseBody res
-      submitTx node commitTx
+      submitTx cardanoClient commitTx
 
       lockedUTxO <- waitMatch 60 n1 $ \v -> do
         guard $ v ^? key "headId" == Just (toJSON headId)
         guard $ v ^? key "tag" == Just "HeadIsOpen"
         pure $ v ^? key "utxo"
       lockedUTxO `shouldBe` Just (toJSON $ UTxO.singleton (scriptTxIn, scriptTxOut))
- where
-  RunningNode{networkId, nodeSocket} = node
 
 singlePartyCannotCommitExternallyWalletUtxo ::
   Tracer IO EndToEndLog ->
@@ -352,10 +341,10 @@ singlePartyCannotCommitExternallyWalletUtxo ::
   RunningNode ->
   TxId ->
   IO ()
-singlePartyCannotCommitExternallyWalletUtxo tracer workDir node hydraScriptsTxId =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    aliceChainConfig <- chainConfigFor Alice workDir nodeSocket [] $ UnsafeContestationPeriod 100
+singlePartyCannotCommitExternallyWalletUtxo tracer workDir cardanoClient hydraScriptsTxId =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    aliceChainConfig <- chainConfigFor Alice workDir cardanoClient [] $ UnsafeContestationPeriod 100
     let hydraNodeId = 1
     withHydraNode tracer aliceChainConfig workDir hydraNodeId aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       send n1 $ input "Init" []
@@ -367,11 +356,9 @@ singlePartyCannotCommitExternallyWalletUtxo tracer workDir node hydraScriptsTxId
       -- present at this public key
       (userVk, _userSk) <- keysFor Alice
       -- submit the tx using our external user key to get a utxo to commit
-      utxoToCommit <- seedFromFaucet node userVk 2_000_000 (contramap FromFaucet tracer)
-      -- Request to build a draft commit tx from hydra-node
+      utxoToCommit <- seedFromFaucet cardanoClient userVk 2_000_000 (contramap FromFaucet tracer)
+      -- Request to build a draft commit tx from hydra-cardanoClient
       requestCommitTx n1 utxoToCommit `shouldThrow` expectErrorStatus 400 (Just "SpendingNodeUtxoForbidden")
- where
-  RunningNode{nodeSocket} = node
 
 -- | Initialize open and close a head on a real network and ensure contestation
 -- period longer than the time horizon is possible. For this it is enough that
@@ -382,20 +369,20 @@ canCloseWithLongContestationPeriod ::
   RunningNode ->
   TxId ->
   IO ()
-canCloseWithLongContestationPeriod tracer workDir node hydraScriptsTxId = do
-  refuelIfNeeded tracer node Alice 100_000_000
-  -- Start hydra-node on chain tip
-  tip <- queryTip networkId nodeSocket
+canCloseWithLongContestationPeriod tracer workDir cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} hydraScriptsTxId = do
+  refuelIfNeeded tracer cardanoClient Alice 100_000_000
+  -- Start hydra-cardanoClient on chain tip
+  tip <- queryTipClientOnline cardanoClient
   let oneWeek = UnsafeContestationPeriod (60 * 60 * 24 * 7)
   aliceChainConfig <-
-    chainConfigFor Alice workDir nodeSocket [] oneWeek
+    chainConfigFor Alice workDir cardanoClient [] oneWeek
       <&> \config -> config{networkId, startChainFrom = Just tip}
   withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
     -- Initialize & open head
     send n1 $ input "Init" []
     headId <- waitMatch 60 n1 $ headIsInitializingWith (Set.fromList [alice])
     -- Commit nothing for now
-    requestCommitTx n1 mempty >>= submitTx node
+    requestCommitTx n1 mempty >>= submitTx cardanoClient
     waitFor tracer 60 [n1] $
       output "HeadIsOpen" ["utxo" .= object mempty, "headId" .= headId]
     -- Close head
@@ -405,11 +392,9 @@ canCloseWithLongContestationPeriod tracer workDir node hydraScriptsTxId = do
         guard $ v ^? key "tag" == Just "HeadIsClosed"
   traceRemainingFunds Alice
  where
-  RunningNode{networkId, nodeSocket} = node
-
   traceRemainingFunds actor = do
     (actorVk, _) <- keysFor actor
-    utxo <- queryUTxOFor networkId nodeSocket QueryTip actorVk
+    utxo <- queryUTxOForClientOnline cardanoClient queryTypeTip actorVk
     traceWith tracer RemainingFunds{actor = actorName actor, utxo}
 
 canSubmitTransactionThroughAPI ::
@@ -418,17 +403,17 @@ canSubmitTransactionThroughAPI ::
   RunningNode ->
   TxId ->
   IO ()
-canSubmitTransactionThroughAPI tracer workDir node hydraScriptsTxId =
-  (`finally` returnFundsToFaucet tracer node Alice) $ do
-    refuelIfNeeded tracer node Alice 25_000_000
-    aliceChainConfig <- chainConfigFor Alice workDir nodeSocket [] $ UnsafeContestationPeriod 100
+canSubmitTransactionThroughAPI tracer workDir cardanoClient@CardanoClientOnline{nodeSocketClientOnline = cardanoClientSocket, networkIdClientOnline = networkId} hydraScriptsTxId =
+  (`finally` returnFundsToFaucet tracer cardanoClient Alice) $ do
+    refuelIfNeeded tracer cardanoClient Alice 25_000_000
+    aliceChainConfig <- chainConfigFor Alice workDir cardanoClient [] $ UnsafeContestationPeriod 100
     let hydraNodeId = 1
     withHydraNode tracer aliceChainConfig workDir hydraNodeId aliceSk [] [hydraNodeId] hydraScriptsTxId $ \_ -> do
       -- let's prepare a _user_ transaction from Bob to Carol
       (cardanoBobVk, cardanoBobSk) <- keysFor Bob
       (cardanoCarolVk, _) <- keysFor Carol
       -- create output for Bob to be sent to carol
-      bobUTxO <- seedFromFaucet node cardanoBobVk 5_000_000 (contramap FromFaucet tracer)
+      bobUTxO <- seedFromFaucet cardanoClient cardanoBobVk 5_000_000 (contramap FromFaucet tracer)
       let carolsAddress = mkVkAddress networkId cardanoCarolVk
           bobsAddress = mkVkAddress networkId cardanoBobVk
           carolsOutput =
@@ -438,7 +423,7 @@ canSubmitTransactionThroughAPI tracer workDir node hydraScriptsTxId =
               TxOutDatumNone
               ReferenceScriptNone
       -- prepare fully balanced tx body
-      buildTransaction networkId nodeSocket bobsAddress bobUTxO (fst <$> UTxO.pairs bobUTxO) [carolsOutput] >>= \case
+      buildTransaction networkId cardanoClientSocket bobsAddress bobUTxO (fst <$> UTxO.pairs bobUTxO) [carolsOutput] >>= \case
         Left e -> failure $ show e
         Right body -> do
           let unsignedTx = makeSignedTransaction [] body
@@ -450,7 +435,6 @@ canSubmitTransactionThroughAPI tracer workDir node hydraScriptsTxId =
           (sendRequest hydraNodeId signedRequest <&> responseBody)
             `shouldReturn` TransactionSubmitted
  where
-  RunningNode{networkId, nodeSocket} = node
   sendRequest hydraNodeId tx =
     runReq defaultHttpConfig $
       req
@@ -467,16 +451,14 @@ refuelIfNeeded ::
   Actor ->
   Lovelace ->
   IO ()
-refuelIfNeeded tracer node actor amount = do
+refuelIfNeeded tracer cardanoClient actor amount = do
   (actorVk, _) <- keysFor actor
-  existingUtxo <- queryUTxOFor networkId nodeSocket QueryTip actorVk
+  existingUtxo <- queryUTxOForClientOnline cardanoClient queryTypeTip actorVk
   traceWith tracer $ StartingFunds{actor = actorName actor, utxo = existingUtxo}
   let currentBalance = selectLovelace $ balance @Tx existingUtxo
   when (currentBalance < amount) $ do
-    utxo <- seedFromFaucet node actorVk amount (contramap FromFaucet tracer)
+    utxo <- seedFromFaucet cardanoClient actorVk amount (contramap FromFaucet tracer)
     traceWith tracer $ RefueledFunds{actor = actorName actor, refuelingAmount = amount, utxo}
- where
-  RunningNode{networkId, nodeSocket} = node
 
 -- | Return the remaining funds to the faucet
 returnFundsToFaucet ::
