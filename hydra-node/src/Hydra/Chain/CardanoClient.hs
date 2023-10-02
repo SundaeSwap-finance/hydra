@@ -1,18 +1,56 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE PolyKinds #-}
 -- | A basic cardano-node client that can talk to a local cardano-node.
 --
 -- The idea of this module is to provide a Haskell interface on top of
 -- cardano-cli's API, using cardano-api types.
-module Hydra.Chain.CardanoClient where
+module Hydra.Chain.CardanoClient (
+  -- * CardanoClient handle
+  IsCardanoClient (..),
+  CardanoClient (..),
+  ClientMode (..),
+  modeTag,
+  mkCardanoClientOnline,
+  -- * Tx Construction / Submission
+  buildTransaction,
+  submitTransaction,
+  SubmitTransactionException (..),
+  awaitTransaction,
+  -- * Local state query
+  QueryPoint (..),
+  queryTip,
+  queryTipSlotNo,
+  querySystemStart,
+  queryEraHistory,
+  queryProtocolParameters,
+  queryGenesisParameters,
+  queryUTxO,
+  queryUTxOByTxIn,
+  queryUTxOWhole,
+  queryUTxOFor,
+  queryStakePools,
+  -- * Helpers
+  runQuery,
+  throwOnEraMismatch,
+  localNodeConnectInfo,
+  cardanoModeParams,
+  -- * Exceptions
+  QueryException (..),
+  ) where
 
 import Hydra.Prelude
 
-import Hydra.Cardano.Api hiding (Block)
+import Hydra.Cardano.Api hiding (Block, queryGenesisParameters)
 
 import qualified Cardano.Api.UTxO as UTxO
 import Cardano.Ledger.Core (PParams)
 import qualified Data.Set as Set
 import Ouroboros.Consensus.HardFork.Combinator.AcrossEras (EraMismatch)
 import Test.QuickCheck (oneof)
+import Hydra.Ledger (IsTx)
+import Hydra.Ledger.Cardano ()
 
 data QueryException
   = QueryAcquireException AcquiringFailure
@@ -33,19 +71,239 @@ instance Exception QueryException
 
 -- * CardanoClient handle
 
+-- draft with type families (+ gadt)
+-- this can be opened up by removing the equality constraint with the CardanoClient GADT
+
+class
+  ( IsTx (TxType mode)
+  , Typeable mode
+  , CardanoClientType mode ~ CardanoClient mode
+  ) => IsCardanoClient (mode :: ClientMode) where
+  type CardanoClientType mode = (r :: Type) | r -> mode
+  type CardanoClientType mode = CardanoClient mode
+
+  --TODO(ELAINE): do we want transaction type to always be fixed for a given mode?
+  -- id assume so, i cant think of a use for onlinemode + non Tx, seems like itd add complexity
+  -- okay after thinking about how this is getting used in the main executable, id say yes, we do want it to be fixed
+  type TxType mode :: Type
+
+  -- QueryPoint generalization
+  type QueryType mode :: Type
+
+
+  -- these are all the methods that are common to both online and offline mode
+  --TODO(ELAINE): rename this, but this should be how to call the methods on the client
+  submitTransactionClient :: CardanoClientType mode -> TxType mode -> IO ()
+  queryTipClient :: CardanoClientType mode -> IO ChainTip
+  querySystemStartClient :: CardanoClientType mode -> QueryType mode -> IO SystemStart
+  queryEraHistoryClient :: CardanoClientType mode -> QueryType mode -> IO (EraHistory CardanoMode)
+  queryProtocolParametersClient :: CardanoClientType mode -> QueryType mode -> IO (PParams LedgerEra)
+  queryGenesisParametersClient :: CardanoClientType mode -> QueryType mode -> IO (GenesisParameters ShelleyEra)
+
+
+--draft with data families (precluding gadt)
+-- class (IsTx (TxType mode) ) => IsCardanoClient (mode :: ClientMode) where
+--   data CardanoClient mode :: Type
+--   --TODO(ELAINE): do we want transaction type to always be fixed for a given mode?
+--   -- id assume so, i cant think of a use for onlinemode + non Tx, seems like itd add complexity
+--   -- okay after thinking about how this is getting used in the main executable, id say yes, we do want it to be fixed
+--   type TxType mode :: Type
+
+--   submitTransactionClass :: CardanoClient mode -> TxType mode -> IO ()
+--   -- queryTipClass :: CardanoClient mode -> IO ChainTip
+
+-- instance IsCardanoClient 'ClientOffline where
+--   type TxType 'ClientOffline = Tx
+
+--   submitTransactionClass = undefined
+--   data CardanoClient 'ClientOffline = CardanoClientOffline
+--     {}
+
+-- instance IsCardanoClient 'ClientOnline where
+--   type TxType 'ClientOnline = Tx
+
+--   submitTransactionClass = submitTransactionNEW
+--   data CardanoClient 'ClientOnline = CardanoClientOnline
+--     {
+--       --TODO(ELAINE): rename these
+--       buildTransactionNEW :: AddressInEra -> UTxO -> [TxIn] -> [TxOut CtxTx] -> IO (Either TxBodyErrorAutoBalance TxBody)
+--     , submitTransactionNEW :: Tx -> IO ()
+--     , awaitTransactionNEW :: Tx -> IO UTxO
+--     , queryTipNEW :: IO ChainTip -- TODO(ELAINE): would it be possible to dedup this with that record that queries for current slot etc
+--     -- , queryGlobals :: IO Globals
+--     , querySystemStartNEW :: QueryPoint -> IO SystemStart
+--     , queryEraHistoryNEW :: QueryPoint -> IO (EraHistory CardanoMode)
+--     -- , queryProtocolParametersNEW :: QueryPoint -> IO BundledProtocolParameters
+--     -- , queryGenesisParametersNEW :: QueryPoint -> IO GenesisParameters
+--     , queryUTxONEW :: QueryPoint -> [Address ShelleyAddr] -> IO UTxO
+--     , queryUTxOByTxInNEW :: QueryPoint -> [TxIn] -> IO UTxO
+--     , queryUTxOWholeNEW :: QueryPoint -> IO UTxO
+--     , queryUTxOForNEW :: QueryPoint -> VerificationKey PaymentKey -> IO UTxO
+--     , queryStakePoolsNEW :: QueryPoint -> IO (Set PoolId)
+--     , networkIdNEW :: NetworkId
+
+--     , queryUTxOByAddress :: [Address ShelleyAddr] -> IO UTxO
+--     , networkId :: NetworkId
+--     }
+  -- mkCardanoClient = mkCardanoClientOnline
+-- thing :: IsCardanoClient mode => CardanoClient mode
+-- thing = mkCardanoClient undefined undefined 
+
+-- thing from gadt
+-- thing :: IsCardanoClient (mode :: ClientMode) => CardanoClient mode -> TxType mode -> IO ()
+-- thing = submitTransactionClass
+
+
+-- pattern match using type level proof
+-- thingOnline :: CardanoClient mode -> CardanoClient mode -> TxType mode -> IO ()
+-- thingOnline c = case c of
+--   CardanoClientOnline{} -> submitTransactionNEW
+--   CardanoClientOffline{} -> undefined
+
+
+
+-- onlyOnlineCode 
+
+-- defined with datakinds instead of an open typeclass, because we probably don't actually want people to extend this willy nilly
+data ClientMode = ClientOnline | ClientOffline
+  deriving (Eq, Show, Generic, Typeable)
+
+
+--GADT:
+data CardanoClient (mode :: ClientMode) where
+  CardanoClientOffline ::
+    {}  -> CardanoClient 'ClientOffline
+  CardanoClientOnline ::
+    {
+        buildTransactionClientOnline :: AddressInEra -> UTxO -> [TxIn] -> [TxOut CtxTx] -> IO (Either TxBodyErrorAutoBalance TxBody)
+      , submitTransactionClientOnline :: Tx -> IO ()
+      , awaitTransactionClientOnline :: Tx -> IO UTxO
+      , queryTipClientOnline :: IO ChainTip -- TODO(ELAINE): would it be possible to dedup this with that record that queries for current slot etc
+      -- , queryGlobals :: IO Globals
+      , querySystemStartClientOnline :: QueryPoint -> IO SystemStart
+      , queryEraHistoryClientOnline :: QueryPoint -> IO (EraHistory CardanoMode)
+      , queryProtocolParametersClientOnline :: QueryPoint -> IO (PParams LedgerEra)
+      , queryGenesisParametersClientOnline :: QueryPoint -> IO (GenesisParameters ShelleyEra)
+      , queryUTxOClientOnline :: QueryPoint -> [Address ShelleyAddr] -> IO UTxO
+      , queryUTxOByTxInClientOnline :: QueryPoint -> [TxIn] -> IO UTxO
+      , queryUTxOWholeClientOnline :: QueryPoint -> IO UTxO
+      , queryUTxOForClientOnline :: QueryPoint -> VerificationKey PaymentKey -> IO UTxO
+      , queryStakePoolsClientOnline :: QueryPoint -> IO (Set PoolId)
+      , networkIdClientOnline :: NetworkId
+      
+      , queryUTxOByAddressClientOnline :: [Address ShelleyAddr] -> IO UTxO
+    } -> CardanoClient 'ClientOnline
+
+mkCardanoClientOnline :: NetworkId -> SocketPath -> CardanoClient 'ClientOnline
+mkCardanoClientOnline networkId nodeSocket =
+  CardanoClientOnline
+    {
+      buildTransactionClientOnline = buildTransaction networkId nodeSocket
+    , submitTransactionClientOnline = submitTransaction networkId nodeSocket
+    , awaitTransactionClientOnline = awaitTransaction networkId nodeSocket
+    -- | NOTE: different type from the old one
+    , queryTipClientOnline = getLocalChainTip (localNodeConnectInfo networkId nodeSocket)
+    -- , queryGlobals = HydraLedger.newGlobals =<< queryGenesisParameters networkId nodeSocket QueryTip
+    , querySystemStartClientOnline = querySystemStart networkId nodeSocket
+    , queryEraHistoryClientOnline = queryEraHistory networkId nodeSocket
+    , queryProtocolParametersClientOnline = queryProtocolParameters networkId nodeSocket
+    , queryGenesisParametersClientOnline = queryGenesisParameters networkId nodeSocket    
+    , queryUTxOClientOnline = queryUTxO networkId nodeSocket
+    , queryUTxOByTxInClientOnline = queryUTxOByTxIn networkId nodeSocket
+    , queryUTxOWholeClientOnline = queryUTxOWhole networkId nodeSocket
+    , queryUTxOForClientOnline = queryUTxOFor networkId nodeSocket
+    , queryStakePoolsClientOnline = queryStakePools networkId nodeSocket
+    , networkIdClientOnline = networkId
+    
+    , queryUTxOByAddressClientOnline = queryUTxO networkId nodeSocket QueryTip
+    }
+
+
+instance IsCardanoClient 'ClientOnline where
+  type TxType 'ClientOnline = Tx
+  type QueryType 'ClientOnline = QueryPoint
+
+  submitTransactionClient = submitTransactionClientOnline
+  queryTipClient = queryTipClientOnline
+  querySystemStartClient = querySystemStartClientOnline
+  queryEraHistoryClient = queryEraHistoryClientOnline
+  queryProtocolParametersClient = queryProtocolParametersClientOnline
+  queryGenesisParametersClient = queryGenesisParametersClientOnline
+
+--TODO(ELAINE): is this enough reflection to make stuff convenient?
+modeTag :: CardanoClient (mode :: ClientMode) -> ClientMode
+modeTag c = case c of
+  CardanoClientOffline{} -> ClientOffline
+  CardanoClientOnline{} -> ClientOnline
+
+-- typeclass for checking if a mode is online
+-- can be opened up for multiple variants of online mode by removing the equality constraint
+-- class (mode ~ 'ClientOnline) => IsCardanoClientOnline (mode :: ClientMode) where
+  
+-- instance IsCardanoClientOnline 'ClientOnline where
+
+-- data CardanoClient (mode :: ClientMode) where
+--   CardanoClientOnline ::
+--     {
+--       --TODO(ELAINE): rename these
+--       buildTransactionNEW :: AddressInEra -> UTxO -> [TxIn] -> [TxOut CtxTx] -> IO (Either TxBodyErrorAutoBalance TxBody)
+--     , submitTransactionNEW :: Tx -> IO ()
+--     , awaitTransactionNEW :: Tx -> IO UTxO
+--     , queryTipNEW :: IO ChainTip -- TODO(ELAINE): would it be possible to dedup this with that record that queries for current slot etc
+--     -- , queryGlobals :: IO Globals
+--     , querySystemStartNEW :: QueryPoint -> IO SystemStart
+--     , queryEraHistoryNEW :: QueryPoint -> IO (EraHistory CardanoMode)
+--     -- , queryProtocolParametersNEW :: QueryPoint -> IO BundledProtocolParameters
+--     -- , queryGenesisParametersNEW :: QueryPoint -> IO GenesisParameters
+--     , queryUTxONEW :: QueryPoint -> [Address ShelleyAddr] -> IO UTxO
+--     , queryUTxOByTxInNEW :: QueryPoint -> [TxIn] -> IO UTxO
+--     , queryUTxOWholeNEW :: QueryPoint -> IO UTxO
+--     , queryUTxOForNEW :: QueryPoint -> VerificationKey PaymentKey -> IO UTxO
+--     , queryStakePoolsNEW :: QueryPoint -> IO (Set PoolId)
+--     , networkIdNEW :: NetworkId
+
+--     , queryUTxOByAddress :: [Address ShelleyAddr] -> IO UTxO
+--     , networkId :: NetworkId
+--     }  -> CardanoClient 'ClientOnline
+
 -- | Handle interface for abstract querying of a cardano node.
-data CardanoClient = CardanoClient
-  { queryUTxOByAddress :: [Address ShelleyAddr] -> IO UTxO
-  , networkId :: NetworkId
-  }
+-- data CardanoClient = CardanoClient
+--   { queryUTxOByAddress :: [Address ShelleyAddr] -> IO UTxO
+--   , networkId :: NetworkId
+--   }
 
 -- | Construct a 'CardanoClient' handle.
-mkCardanoClient :: NetworkId -> SocketPath -> CardanoClient
-mkCardanoClient networkId nodeSocket =
-  CardanoClient
-    { queryUTxOByAddress = queryUTxO networkId nodeSocket QueryTip
-    , networkId
-    }
+-- mkCardanoClient :: NetworkId -> SocketPath -> CardanoClient
+-- mkCardanoClient networkId nodeSocket =
+--   CardanoClient
+--     { queryUTxOByAddress = queryUTxO networkId nodeSocket QueryTip
+--     , networkId
+--     }
+
+-- | Construct a 'CardanoClient' handle.
+-- mkCardanoClientOnline :: NetworkId -> SocketPath -> CardanoClient 'ClientOnline
+-- mkCardanoClientOnline networkId nodeSocket =
+--   CardanoClientOnline
+--     {
+--       buildTransactionNEW = buildTransaction networkId nodeSocket
+--     , submitTransactionNEW = submitTransaction networkId nodeSocket
+--     , awaitTransactionNEW = awaitTransaction networkId nodeSocket
+--     -- | NOTE: different type from the old one
+--     , queryTipNEW = getLocalChainTip (localNodeConnectInfo networkId nodeSocket)
+--     -- , queryGlobals = HydraLedger.newGlobals =<< queryGenesisParameters networkId nodeSocket QueryTip
+--     , querySystemStartNEW = querySystemStart networkId nodeSocket
+--     , queryEraHistoryNEW = queryEraHistory networkId nodeSocket
+--     -- , queryProtocolParametersNEW = queryProtocolParameters networkId nodeSocket
+--     -- , queryGenesisParametersNEW = queryGenesisParameters networkId nodeSocket
+--     , queryUTxONEW = queryUTxO networkId nodeSocket
+--     , queryUTxOByTxInNEW = queryUTxOByTxIn networkId nodeSocket
+--     , queryUTxOWholeNEW = queryUTxOWhole networkId nodeSocket
+--     , queryUTxOForNEW = queryUTxOFor networkId nodeSocket
+--     , queryStakePoolsNEW = queryStakePools networkId nodeSocket
+--     , networkIdNEW = networkId
+--     , queryUTxOByAddress = queryUTxO networkId nodeSocket QueryTip
+--     , networkId
+--     }
 
 -- * Tx Construction / Submission
 

@@ -53,7 +53,7 @@ import Graphics.Vty.Attributes (defAttr)
 import Hydra.API.ClientInput (ClientInput (..))
 import Hydra.API.ServerOutput (ServerOutput (..), TimedServerOutput (..))
 import Hydra.Chain (HeadId, PostTxError (..))
-import Hydra.Chain.CardanoClient (CardanoClient (..), mkCardanoClient)
+import Hydra.Chain.CardanoClient (CardanoClient (..), mkCardanoClientOnline, ClientMode (..))
 import Hydra.Chain.Direct.State ()
 import Hydra.Client (Client (..), HydraEvent (..), withClient)
 import Hydra.Ledger (IsTx (..))
@@ -219,7 +219,7 @@ initPending = pendingL .~ Pending
 
 handleEvent ::
   Client Tx IO ->
-  CardanoClient ->
+  CardanoClient 'ClientOnline ->
   State ->
   BrickEvent Name (HydraEvent Tx) ->
   EventM Name (Next State)
@@ -442,16 +442,16 @@ handleDialogEvent (title, form, submit) s = \case
 
 showCommitDialog ::
   Client Tx IO ->
-  CardanoClient ->
+  CardanoClient 'ClientOnline ->
   State ->
   EventM n (Next State)
-showCommitDialog Client{sk, externalCommit} CardanoClient{queryUTxOByAddress, networkId} s = do
-  utxo <- liftIO $ queryUTxOByAddress [ourAddress]
+showCommitDialog Client{sk, externalCommit} CardanoClientOnline{queryUTxOByAddressClientOnline, networkIdClientOnline} s = do
+  utxo <- liftIO $ queryUTxOByAddressClientOnline [ourAddress]
   continue $ s & dialogStateL .~ commitDialog (UTxO.toMap utxo)
  where
   ourAddress =
     makeShelleyAddress
-      networkId
+      networkIdClientOnline
       (PaymentCredentialByKey . verificationKeyHash $ getVerificationKey sk)
       NoStakeAddress
 
@@ -466,10 +466,10 @@ showCommitDialog Client{sk, externalCommit} CardanoClient{queryUTxOByAddress, ne
 
 handleNewTxEvent ::
   Client Tx IO ->
-  CardanoClient ->
+  CardanoClient 'ClientOnline ->
   State ->
   EventM n (Next State)
-handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? headStateL of
+handleNewTxEvent Client{sendInput, sk} CardanoClientOnline{networkIdClientOnline} s = case s ^? headStateL of
   Just Open{utxo} ->
     continue $ s & dialogStateL .~ transactionBuilderDialog utxo
   _ ->
@@ -480,7 +480,7 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
   transactionBuilderDialog utxo =
     Dialog title form submit
    where
-    myUTxO = myAvailableUTxO networkId vk s
+    myUTxO = myAvailableUTxO networkIdClientOnline vk s
     title = "Select UTXO to spend"
     -- FIXME: This crashes if the utxo is empty
     form = newForm (utxoRadioField myUTxO) (Prelude.head (Map.toList myUTxO))
@@ -538,8 +538,8 @@ scroll s direction =
       let vp = viewportScroll shortFeedbackViewportName
       hScrollPage vp direction
 
-draw :: Client Tx m -> CardanoClient -> State -> [Widget Name]
-draw Client{sk} CardanoClient{networkId} s =
+draw :: Client Tx m -> CardanoClient 'ClientOnline -> State -> [Widget Name]
+draw Client{sk} CardanoClientOnline{networkIdClientOnline} s =
   pure $
     withBorderStyle ascii $
       joinBorders $
@@ -610,7 +610,7 @@ draw Client{sk} CardanoClient{networkId} s =
         _ -> emptyWidget
 
     ownAddress =
-      str "Address " <+> drawAddress (mkVkAddress networkId vk)
+      str "Address " <+> drawAddress (mkVkAddress (networkIdClientOnline) vk)
 
     nodeStatus =
       case s of
@@ -738,7 +738,7 @@ draw Client{sk} CardanoClient{networkId} s =
           ]
 
   drawAddress addr
-    | mkVkAddress networkId vk == addr =
+    | mkVkAddress networkIdClientOnline vk == addr =
         withAttr own widget
     | otherwise =
         widget
@@ -899,7 +899,8 @@ runWithVty buildVty options@Options{hydraNodeHost, cardanoNetworkId, cardanoNode
       , now
       }
 
-  cardanoClient = mkCardanoClient cardanoNetworkId cardanoNodeSocket
+  --TODO(Elaine): offline and online mode support
+  cardanoClient = mkCardanoClientOnline cardanoNetworkId cardanoNodeSocket
 
   timer chan = forever $ do
     now <- getCurrentTime
