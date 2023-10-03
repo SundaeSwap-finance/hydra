@@ -77,6 +77,7 @@ import Options.Applicative.Builder (str)
 import Options.Applicative.Help (vsep)
 import Paths_hydra_node (version)
 import Test.QuickCheck (elements, listOf, listOf1, oneof, suchThat, vectorOf)
+import Hydra.Chain.CardanoClient (CardanoClient (CardanoClientOnline, networkIdClientOnline, nodeSocketClientOnline), ClientMode (..), mkCardanoClientOnline)
 
 data ParamMismatch
   = ContestationPeriodMismatch {loadedCp :: ContestationPeriod, configuredCp :: ContestationPeriod}
@@ -274,12 +275,13 @@ cardanoLedgerProtocolParametersParser =
           "Path to protocol parameters used in the Hydra Head. \
           \See manual how to configure this."
     )
+--FIXME(Elaine) this is just so we can get deriving via without too much torture
+
 
 data ChainConfig = DirectChainConfig
-  { networkId :: NetworkId
-  -- ^ Network identifer to which we expect to connect.
-  , nodeSocket :: SocketPath
-  -- ^ Path to a domain socket used to connect to the server.
+  {
+    cardanoClient :: CardanoClient 'ClientOnline
+  -- ^ Cardano client used to connect to the server.
   , cardanoSigningKey :: FilePath
   -- ^ Path to the cardano signing key of the internal wallet.
   , cardanoVerificationKeys :: [FilePath]
@@ -293,8 +295,7 @@ data ChainConfig = DirectChainConfig
 defaultChainConfig :: ChainConfig
 defaultChainConfig =
   DirectChainConfig
-    { networkId = Testnet (NetworkMagic 42)
-    , nodeSocket = "node.socket"
+    { cardanoClient = mkCardanoClientOnline (Testnet (NetworkMagic 42)) "node.socket"
     , cardanoSigningKey = "cardano.sk"
     , cardanoVerificationKeys = []
     , startChainFrom = Nothing
@@ -311,19 +312,23 @@ instance Arbitrary ChainConfig where
     contestationPeriod <- arbitrary `suchThat` (> UnsafeContestationPeriod 0)
     pure $
       DirectChainConfig
-        { networkId
-        , nodeSocket
+        { cardanoClient = mkCardanoClientOnline networkId nodeSocket 
         , cardanoSigningKey
         , cardanoVerificationKeys
         , startChainFrom
         , contestationPeriod
         }
 
+cardanoClientOnlineParser :: Parser (CardanoClient 'ClientOnline)
+cardanoClientOnlineParser =
+  mkCardanoClientOnline
+    <$> networkIdParser
+    <*> nodeSocketParser
+
 chainConfigParser :: Parser ChainConfig
 chainConfigParser =
   DirectChainConfig
-    <$> networkIdParser
-    <*> nodeSocketParser
+    <$> cardanoClientOnlineParser
     <*> cardanoSigningKeyFileParser
     <*> many cardanoVerificationKeyFileParser
     <*> optional startChainFromParser
@@ -719,8 +724,8 @@ toArgs
         []
 
     argsChainConfig =
-      toArgNetworkId networkId
-        <> ["--node-socket", unFile nodeSocket]
+      toArgNetworkId networkIdClientOnline
+        <> ["--node-socket", unFile nodeSocketClientOnline]
         <> ["--cardano-signing-key", cardanoSigningKey]
         <> ["--contestation-period", show contestationPeriod]
         <> concatMap (\vk -> ["--cardano-verification-key", vk]) cardanoVerificationKeys
@@ -734,8 +739,7 @@ toArgs
       } = ledgerConfig
 
     DirectChainConfig
-      { networkId
-      , nodeSocket
+      { cardanoClient = CardanoClientOnline{networkIdClientOnline, nodeSocketClientOnline}
       , cardanoSigningKey
       , cardanoVerificationKeys
       , startChainFrom

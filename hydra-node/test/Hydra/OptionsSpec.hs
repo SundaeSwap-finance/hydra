@@ -35,6 +35,7 @@ import Hydra.Options (
 import Test.Aeson.GenericSpecs (roundtripAndGoldenSpecs)
 import Test.QuickCheck (Property, chooseEnum, counterexample, forAll, property, vectorOf, (===))
 import Text.Regex.TDFA ((=~))
+import Hydra.Chain.CardanoClient (CardanoClient(..))
 
 spec :: Spec
 spec = parallel $
@@ -132,7 +133,7 @@ spec = parallel $
           defaultRunOptions
             { chainConfig =
                 defaultChainConfig
-                  { networkId = Testnet (NetworkMagic 0)
+                  { cardanoClient = (cardanoClient defaultChainConfig){networkIdClientOnline = Testnet (NetworkMagic 0) }
                   }
             }
       setFlags ["--testnet-magic", "-1"] -- Word32 overflow expected
@@ -140,16 +141,18 @@ spec = parallel $
           defaultRunOptions
             { chainConfig =
                 defaultChainConfig
-                  { networkId = Testnet (NetworkMagic 4294967295)
+                  { cardanoClient = (cardanoClient defaultChainConfig){networkIdClientOnline = Testnet (NetworkMagic 4294967295) }
                   }
+                  
             }
       setFlags ["--testnet-magic", "123"]
         `shouldParse` Run
           defaultRunOptions
             { chainConfig =
                 defaultChainConfig
-                  { networkId = Testnet (NetworkMagic 123)
+                  { cardanoClient = (cardanoClient defaultChainConfig){networkIdClientOnline = Testnet (NetworkMagic 123) }
                   }
+                  
             }
 
     it "parses --mainnet option" $ do
@@ -158,7 +161,7 @@ spec = parallel $
           defaultRunOptions
             { chainConfig =
                 defaultChainConfig
-                  { networkId = Mainnet
+                  { cardanoClient = (cardanoClient defaultChainConfig){networkIdClientOnline = Mainnet }
                   }
             }
 
@@ -194,7 +197,7 @@ spec = parallel $
           defaultRunOptions
             { chainConfig =
                 defaultChainConfig
-                  { nodeSocket = "foo.sock"
+                  { cardanoClient = (cardanoClient defaultChainConfig){ nodeSocketClientOnline = "foo.sock" }
                   }
             }
 

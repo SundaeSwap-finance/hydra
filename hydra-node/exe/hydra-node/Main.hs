@@ -133,7 +133,11 @@ main = do
      in withAuthentication (contramap Authentication tracer) signingKey parties $ withHeartbeat nodeId connectionMessages $ withOuroborosNetwork (contramap Network tracer) localhost peers
 
   withCardanoLedger chainConfig protocolParams action = do
-    let DirectChainConfig{networkId, nodeSocket} = chainConfig
+    let DirectChainConfig{cardanoClient =
+          CardanoClientOnline
+          { networkIdClientOnline = networkId
+          , nodeSocketClientOnline = nodeSocket
+          }} = chainConfig
     let cardanoClient = mkCardanoClientOnline networkId nodeSocket
     globals <- newGlobals =<< queryGenesisParametersClientOnline cardanoClient queryTypeTip
     let ledgerEnv = newLedgerEnv protocolParams

@@ -60,7 +60,7 @@ import Hydra.ContestationPeriod (ContestationPeriod (UnsafeContestationPeriod))
 import Hydra.Ledger (IsTx (balance))
 import Hydra.Ledger.Cardano (genKeyPair)
 import Hydra.Logging (Tracer, traceWith)
-import Hydra.Options (ChainConfig, networkId, startChainFrom)
+import Hydra.Options (ChainConfig, startChainFrom)
 import Hydra.Party (Party)
 import HydraNode (EndToEndLog (..), HydraClient, input, output, requestCommitTx, send, waitFor, waitForAllMatch, waitMatch, withHydraNode)
 import qualified Network.HTTP.Client as L
@@ -93,11 +93,9 @@ restartedNodeCanObserveCommitTx tracer workDir cardanoClient@CardanoClientOnline
   aliceChainConfig <-
     --FIXME(Elaine): get rid of socket in ChainConfig too
     chainConfigFor Alice workDir cardanoClient [Bob] contestationPeriod
-      <&> \config -> (config :: ChainConfig){networkId}
 
   bobChainConfig <-
     chainConfigFor Bob workDir cardanoClient [Alice] contestationPeriod
-      <&> \config -> (config :: ChainConfig){networkId}
 
   withHydraNode tracer bobChainConfig workDir 1 bobSk [aliceVk] [1, 2] hydraScriptsTxId $ \n1 -> do
     headId <- withHydraNode tracer aliceChainConfig workDir 2 aliceSk [bobVk] [1, 2] hydraScriptsTxId $ \n2 -> do
@@ -124,7 +122,7 @@ restartedNodeCanAbort tracer workDir cardanoClient@CardanoClientOnline{networkId
     chainConfigFor Alice workDir cardanoClient[] contestationPeriod
       -- we delibelately do not start from a chain point here to highlight the
       -- need for persistence
-      <&> \config -> config{networkId, startChainFrom = Nothing}
+      <&> \config -> config{startChainFrom = Nothing}
 
   headId1 <- withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
     send n1 $ input "Init" []
@@ -156,7 +154,7 @@ singlePartyHeadFullLifeCycle tracer workDir cardanoClient@CardanoClientOnline{ne
     let contestationPeriod = UnsafeContestationPeriod 100
     aliceChainConfig <-
       chainConfigFor Alice workDir cardanoClient [] contestationPeriod
-        <&> \config -> config{networkId, startChainFrom = Just tip}
+        <&> \config -> config{startChainFrom = Just tip}
     withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
       -- Initialize & open head
       send n1 $ input "Init" []
@@ -204,7 +202,7 @@ singlePartyOpenAHead tracer workDir cardanoClient@CardanoClientOnline{networkIdC
     let contestationPeriod = UnsafeContestationPeriod 100
     aliceChainConfig <-
       chainConfigFor Alice workDir cardanoClient [] contestationPeriod
-        <&> \config -> config{networkId, startChainFrom = Just tip}
+        <&> \config -> config{startChainFrom = Just tip}
 
     (walletVk, walletSk) <- generate genKeyPair
     let keyPath = workDir <> "/wallet.sk"
@@ -376,7 +374,7 @@ canCloseWithLongContestationPeriod tracer workDir cardanoClient@CardanoClientOnl
   let oneWeek = UnsafeContestationPeriod (60 * 60 * 24 * 7)
   aliceChainConfig <-
     chainConfigFor Alice workDir cardanoClient [] oneWeek
-      <&> \config -> config{networkId, startChainFrom = Just tip}
+      <&> \config -> config{startChainFrom = Just tip}
   withHydraNode tracer aliceChainConfig workDir 1 aliceSk [] [1] hydraScriptsTxId $ \n1 -> do
     -- Initialize & open head
     send n1 $ input "Init" []

@@ -132,8 +132,7 @@ loadChainContext config party otherParties hydraScriptsTxId = do
   --FIXME(Elaine)
   cardanoClient = mkCardanoClientOnline networkId nodeSocket
   DirectChainConfig
-    { networkId
-    , nodeSocket
+    { cardanoClient = cardanoClient@CardanoClientOnline{networkIdClientOnline = networkId} 
     , cardanoSigningKey
     , cardanoVerificationKeys
     , contestationPeriod
@@ -145,20 +144,19 @@ mkTinyWallet ::
   IO (TinyWallet IO)
 mkTinyWallet tracer config = do
   keyPair <- readKeyPair cardanoSigningKey
-  newTinyWallet (contramap Wallet tracer) networkId keyPair queryWalletInfo queryEpochInfo
+  newTinyWallet (contramap Wallet tracer) (networkIdClientOnline cardanoClient) keyPair queryWalletInfo queryEpochInfo
  where
-  DirectChainConfig{networkId, nodeSocket, cardanoSigningKey} = config
-  cardanoClient = mkCardanoClientOnline networkId nodeSocket
+  DirectChainConfig{cardanoClient, cardanoSigningKey} = config
 
-  queryEpochInfo = toEpochInfo <$> queryEraHistory networkId nodeSocket QueryTip
+  queryEpochInfo = toEpochInfo <$> queryEraHistoryClientOnline cardanoClient queryTypeTip
 
   queryWalletInfo queryPoint address = do
     point <- case queryPoint of
       QueryAt point -> pure point
       QueryTip -> queryTipClient cardanoClient
-    walletUTxO <- Ledger.unUTxO . toLedgerUTxO <$> queryUTxO networkId nodeSocket QueryTip [address]
-    pparams <- queryProtocolParameters networkId nodeSocket QueryTip
-    systemStart <- querySystemStart networkId nodeSocket QueryTip
+    walletUTxO <- Ledger.unUTxO . toLedgerUTxO <$> queryUTxOClientOnline cardanoClient queryTypeTip [address]
+    pparams <- queryProtocolParametersClientOnline cardanoClient queryTypeTip
+    systemStart <- querySystemStartClientOnline cardanoClient queryTypeTip
     epochInfo <- queryEpochInfo
     pure $ WalletInfoOnChain{walletUTxO, pparams, systemStart, epochInfo, tip = point}
 
@@ -210,8 +208,12 @@ withDirectChain tracer config ctx wallet chainStateHistory callback action = do
     Left () -> error "'connectTo' cannot terminate but did?"
     Right a -> pure a
  where
-  cardanoClient = mkCardanoClientOnline networkId nodeSocket
-  DirectChainConfig{networkId, nodeSocket, startChainFrom} = config
+  DirectChainConfig
+    { cardanoClient = cardanoClient@CardanoClientOnline
+      { networkIdClientOnline = networkId
+      , nodeSocketClientOnline = nodeSocket
+      }
+    , startChainFrom } = config
 
   connectInfo =
     LocalNodeConnectInfo
