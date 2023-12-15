@@ -60,7 +60,8 @@ import Hydra.Network (Network (..))
 import Hydra.Network.Message (Message)
 import Hydra.Node.EventQueue (EventQueue (..), Queued (..))
 import Hydra.Node.ParameterMismatch (ParamMismatch (..), ParameterMismatch (..))
-import Hydra.Options (ChainConfig (..), RunOptions (..))
+import Hydra.Options (ChainConfig (..), RunOptions (..), RunOfflineOptions (..), defaultContestationPeriod)
+import Hydra.Options.Offline qualified as OfflineOptions
 import Hydra.Party (Party (..), deriveParty)
 import Hydra.Persistence (PersistenceIncremental (..), loadAll)
 
@@ -73,17 +74,11 @@ initEnvironment options = do
   otherParties <- mapM loadParty hydraVerificationKeys
   -- NOTE: This is a cardano-specific initialization step of loading
   -- --cardano-verification-key options and deriving 'OnChainId's from it.
-  ownSigningKey <- case offlineConfig of
-      -- online mode
-    Nothing -> readFileTextEnvelopeThrow (AsSigningKey AsPaymentKey) cardanoSigningKey
-      -- offline mode
-    Just _ -> pure $ Hydra.Prelude.error "Shouldn't be using cardanoSigningKey in offline mode!"
+  ownSigningKey <- readFileTextEnvelopeThrow (AsSigningKey AsPaymentKey) cardanoSigningKey
     
   otherVerificationKeys <- mapM (readFileTextEnvelopeThrow (AsVerificationKey AsPaymentKey)) cardanoVerificationKeys
-  -- let participants = []
-  let participants =  case offlineConfig of
-        Nothing -> verificationKeyToOnChainId <$> (getVerificationKey ownSigningKey : otherVerificationKeys) 
-        Just _ -> []
+
+  let participants = verificationKeyToOnChainId <$> (getVerificationKey ownSigningKey : otherVerificationKeys) 
   pure $
     Environment
       { party = deriveParty sk
@@ -99,13 +94,35 @@ initEnvironment options = do
   RunOptions
     { hydraSigningKey
     , hydraVerificationKeys
-    , offlineConfig
     , chainConfig =
       DirectChainConfig
         { contestationPeriod
         , cardanoVerificationKeys
         , cardanoSigningKey
         }
+    } = options
+
+initEnvironmentOffline :: RunOfflineOptions -> IO Environment
+initEnvironmentOffline options = do
+  sk <- readFileTextEnvelopeThrow (AsSigningKey AsHydraKey) hydraSigningKey
+  otherParties <- mapM loadParty hydraVerificationKeys
+    
+  let participants = []
+  pure $
+    Environment
+      { party = deriveParty sk
+      , signingKey = sk
+      , otherParties
+      , participants
+      , contestationPeriod = defaultContestationPeriod
+      }
+ where
+  loadParty p =
+    Party <$> readFileTextEnvelopeThrow (AsVerificationKey AsHydraKey) p
+
+  RunOfflineOptions
+    { hydraSigningKey
+    , hydraVerificationKeys
     } = options
 
 -- | Checks that command line options match a given 'HeadState'. This function
