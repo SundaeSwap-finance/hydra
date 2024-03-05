@@ -82,9 +82,10 @@ run opts = do
         (eventSource, filePersistenceSink) <- eventPairFromPersistenceIncremental incPersistence
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
+        udpSink <- exampleUDPSink "0.0.0.0" "3000"
         let eventSinks =
               [ filePersistenceSink
-              , exampleUDPSink "localhost" "3000"
+              , udpSink
               -- NOTE: Add any custom sinks here
               -- , customSink
               ]
