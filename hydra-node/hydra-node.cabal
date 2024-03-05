@@ -67,7 +67,9 @@ library
     Hydra.Chain.ScriptRegistry
     Hydra.Events
     Hydra.Events.FileBased
-    Hydra.Events.Kinesis
+    Hydra.Events.AWS.Kinesis
+    Hydra.Events.AWS.S3
+    Hydra.Events.AWS.Common
     Hydra.Events.UDP
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
@@ -93,11 +95,13 @@ library
     Hydra.Options
     Hydra.Persistence
     Hydra.Utils
+    Gummiworm.Archive
 
   other-modules:   Paths_hydra_node
   build-depends:
     , aeson
     , amazonka
+    , amazonka-s3
     , amazonka-kinesis
     , base
     , blockfrost-client               >=0.9.2.0
@@ -160,6 +164,7 @@ library
     , time
     , transformers
     , typed-process
+    , mtl
     , unliftio
     , wai
     , wai-cors
@@ -167,6 +172,8 @@ library
     , warp
     , warp-tls
     , websockets
+    , conduit
+    , zlib
 
   ghc-options:     -haddock
 

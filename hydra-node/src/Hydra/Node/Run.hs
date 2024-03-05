@@ -50,7 +50,7 @@ import Hydra.Options (
   LedgerConfig (..),
   OfflineChainConfig (..),
   RunOptions (..),
-  validateRunOptions,
+  validateRunOptions, KinesisConfig (..),
  )
 import Hydra.Persistence (createPersistenceIncremental)
 import Hydra.Tx.Environment (Environment (..))
@@ -87,11 +87,14 @@ run opts = do
         incPersistence <- createPersistenceIncremental (persistenceDir <> "/state")
         -- Hydrate with event source and sinks
         (eventSource, filePersistenceSink) <- eventPairFromPersistenceIncremental incPersistence
-        let RunOptions{kinesisConfig} = opts
+        let RunOptions{kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}} = opts
+
+        eventSource <- maybe (pure fileEventSource) snd $ find fst [
+              (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+              ]
 
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
-        udpSink <- exampleUDPSink "0.0.0.0" "3000"
 
         awsLogger <- AWS.newLogger AWS.Debug IO.stdout -- TODO(Elaine): we can use our own nice logging
         awsDiscoveredEnv <- newEnv discover
@@ -107,7 +110,7 @@ run opts = do
         eventSinks <-
           sequence
             [ pure filePersistenceSink
-            , pure udpSink
+            , exampleUDPSink "0.0.0.0" "3000"
             , snd <$> exampleKinesisEventPair kinesisConfig
             -- NOTE: Add any custom sinks here
             -- , customSink
