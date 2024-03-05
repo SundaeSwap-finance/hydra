@@ -162,6 +162,7 @@ library
     , warp
     , warp-tls
     , websockets
+    , network-udp
 
   ghc-options:     -haddock
 

@@ -13,7 +13,10 @@
 -- conflicts.
 module Hydra.Events where
 
+import Data.Aeson (encode)
 import Hydra.Prelude
+import Network.Socket (HostName, ServiceName)
+import Network.UDP
 
 import Conduit (ConduitT, MonadUnliftIO, ResourceT, runResourceT, sourceToList)
 import Hydra.Chain.ChainState (IsChainState)
@@ -71,3 +74,20 @@ instance (ArbitraryIsTx tx, IsChainState tx) => Arbitrary (StateEvent tx) where
 
 genStateEvent :: StateChanged tx -> Gen (StateEvent tx)
 genStateEvent sc = StateEvent <$> arbitrary <*> pure sc <*> arbitrary
+
+-- To build a sink:
+--
+
+-- To build a source:
+
+exampleUDPSink :: (HasEventId e, ToJSON e) => HostName -> ServiceName -> EventSink e IO
+exampleUDPSink addr port =
+  EventSink $ \e -> do
+    socket <- clientSocket addr port False
+    send socket (toStrict $ encode e)
+    putStrLn $ "Sending event " <> show (getEventId e) <> " to UDP"
+
+exampleUDPSource :: a
+exampleUDPSource = undefined
+
+-- Do we want this? I'd assume probably not for a first demo
