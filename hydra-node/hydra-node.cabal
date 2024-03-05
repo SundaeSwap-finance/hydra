@@ -68,6 +68,7 @@ library
     Hydra.ContestationPeriod
     Hydra.Crypto
     Hydra.Events
+    Hydra.Events.UDP
     Hydra.HeadId
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
@@ -145,6 +146,7 @@ library
     , modern-uri
     , network
     , network-mux
+    , network-udp
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus-cardano
@@ -170,7 +172,6 @@ library
     , wai-websockets
     , warp
     , websockets
-    , network-udp
 
   ghc-options:     -haddock
 

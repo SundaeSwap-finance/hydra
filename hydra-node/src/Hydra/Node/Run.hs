@@ -12,7 +12,12 @@ import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters)
 import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
-import Hydra.HeadLogic (Environment (..))
+import Hydra.Events.UDP (exampleUDPSink)
+import Hydra.HeadLogic (
+  Environment (..),
+  Event (..),
+  defaultTTL,
+ )
 import Hydra.Ledger.Cardano qualified as Ledger
 import Hydra.Ledger.Cardano.Configuration (
   Globals,
@@ -82,6 +87,7 @@ run opts = do
         -- customSink <- createCustomSink
         let eventSinks =
               [ filePersistenceSink
+              , exampleUDPSink "localhost" "3000"
               -- NOTE: Add any custom sinks here
               -- , customSink
               ]
