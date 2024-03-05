@@ -48,9 +48,10 @@ import Hydra.Options (
   LedgerConfig (..),
   OfflineChainConfig (..),
   RunOptions (..),
-  validateRunOptions, KinesisConfig (..),
+  validateRunOptions, KinesisConfig (..), S3Config (..),
  )
 import Hydra.Persistence (createPersistenceIncremental, eventPairFromPersistenceIncremental)
+import Hydra.Events.AWS.S3 (exampleS3EventPair)
 
 data ConfigurationException
   = ConfigurationException ProtocolParametersConversionError
@@ -82,10 +83,14 @@ run opts = do
         -- Hydrate with event source and sinks
         persistence <- createPersistenceIncremental $ persistenceDir <> "/state"
         let (fileEventSource, filePersistenceSink) = eventPairFromPersistenceIncremental persistence
-        let RunOptions{kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}} = opts
+        let RunOptions
+              { kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}
+              , s3Config = s3Config@S3Config{s3SourceEnabled}} = opts
 
-        eventSource <- maybe (pure fileEventSource) snd $ find fst [
-              (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+        --TODO(Elaine): asum
+        eventSource <- maybe (pure fileEventSource) snd $ find fst
+              [ (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+              , (s3SourceEnabled, fst <$> exampleS3EventPair s3Config)
               ]
 
         eventSinks <-
@@ -93,6 +98,7 @@ run opts = do
             [ pure filePersistenceSink
             , exampleUDPSink "0.0.0.0" "3000"
             , snd <$> exampleKinesisEventPair kinesisConfig
+            , snd <$> exampleS3EventPair s3Config
             ]
         -- Load events and hydrate sinks
         wetHydraNode <- hydrate eventSource eventSinks dryHydraNode

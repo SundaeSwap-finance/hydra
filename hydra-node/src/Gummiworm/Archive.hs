@@ -12,10 +12,11 @@ import Codec.Serialise.Encoding (encodeListLen, encodeListLenIndef, encodeBreak)
 import Codec.Serialise.Decoding (decodeListLen, peekTokenType, TokenType (..), Decoder, decodeListLenOrIndef, decodeBreakOr)
 import Data.Time.Clock.POSIX (POSIXTime)
 import Data.Time (secondsToNominalDiffTime, nominalDiffTimeToSeconds)
-import Hydra.Cardano.Api (Tx, SerialiseAsCBOR (deserialiseFromCBOR), HasTypeProxy (proxyToAsType))
-import Codec.Serialise (deserialiseOrFail)
+import Hydra.Cardano.Api (Tx, SerialiseAsCBOR (deserialiseFromCBOR, serialiseToCBOR), HasTypeProxy (proxyToAsType))
+import Codec.Serialise (deserialiseOrFail, serialise)
 import Codec.Compression.GZip (decompress, compress)
 import Hydra.Persistence (PersistenceException(PersistenceException))
+import Amazonka.Bytes (encodeBase64)
 
 -- since there are only a few of these its easier to check the size in the Serialise instance
 -- but if we get a lot of these we can define a type alias to BS w KnownNat len or something
@@ -302,3 +303,14 @@ readTransactionsFrom bs =
     let deserializeTxesFromArchiveTransactions =  fmap (deserialiseFromCBOR (proxyToAsType (Proxy @Tx)) . coerce @_ @BS.ByteString) . transactions
       -- in traverse_ applyTxIO (deserializeTxesFromArchiveTransactions txes)
     pure $ sequenceA (deserializeTxesFromArchiveTransactions txes)
+
+-- produces a single compressed CBOR-serialized ArchiveTransactions
+serializeArchiveTransactions :: [Tx] -> IO LByteString
+serializeArchiveTransactions txes = do
+  let archiveTransactions = ArchiveTransactions
+        { gummiwormArchiveVersion = GummiwormVersion "01" --TODO(Elaine): check version number
+        , transactions = fmap (CardanoTx . serialiseToCBOR) txes
+        }
+  let serialized = serialise archiveTransactions
+  putStrLn $ "DEBUG: serialized (uncompressed) transactions to CBOR: " <> decodeUtf8 (encodeBase64 $ toStrict serialized)
+  pure $ compress (serialise archiveTransactions)

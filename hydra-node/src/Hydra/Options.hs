@@ -434,6 +434,7 @@ data KinesisConfig = KinesisConfig
   , kinesisStreamARN :: Text
   , kinesisResumeTimeStamp :: Maybe POSIXTime
   , kinesisResumeShardId :: Maybe Text
+  , kinesisLimitShardId :: Maybe Text
   , kinesisSinkEnabled :: Bool
   , kinesisSourceEnabled :: Bool
   }
@@ -444,6 +445,7 @@ instance Arbitrary KinesisConfig where
   arbitrary =
     KinesisConfig
       <$> arbitrary
+      <*> arbitrary
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary
@@ -471,11 +473,13 @@ kinesisConfigParser =
   KinesisConfig
     <$> strOption
       ( long "kinesis-stream-name"
+          <> value "hydra-archive-test"
           <> metavar "KINESIS-STREAM-NAME"
           <> help "Name of the AWS Kinesis stream to use as a sink and source."
       )
     <*> strOption
       ( long "kinesis-stream-arn"
+          <> value ""
           <> metavar "KINESIS-STREAM-ARN"
           <> help "ARN of the AWS Kinesis stream to use."
       )
@@ -490,6 +494,12 @@ kinesisConfigParser =
         long "kinesis-resume-shard-id"
             <> metavar "KINESIS-RESUME-SHARD-ID"
             <> help "Shard ID to resume from.")
+      )
+    <*> optional (
+      strOption (
+        long "kinesis-limit-shard-id"
+            <> metavar "KINESIS-LIMIT-SHARD-ID"
+            <> help "Shard ID to limit to.")
       )
     <*> flag
       False
