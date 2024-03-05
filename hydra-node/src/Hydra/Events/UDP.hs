@@ -10,10 +10,10 @@ import Network.UDP (clientSocket, send)
 -- To build a sink:
 --
 
-exampleUDPSink :: (HasEventId e, ToJSON e) => HostName -> ServiceName -> EventSink e IO
-exampleUDPSink addr port =
-  EventSink $ \e -> do
-    socket <- clientSocket addr port False
+exampleUDPSink :: (HasEventId e, ToJSON e) => HostName -> ServiceName -> IO (EventSink e IO)
+exampleUDPSink addr port = do
+  socket <- clientSocket addr port False
+  pure $ EventSink $ \e -> do
     send socket (toStrict $ encode e)
     putStrLn $ "Sending event " <> show (getEventId e) <> " to UDP"
 
