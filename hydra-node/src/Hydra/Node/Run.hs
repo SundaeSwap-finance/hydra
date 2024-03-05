@@ -23,6 +23,7 @@ import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
 import Hydra.Events.FileBased (eventPairFromPersistenceIncremental)
 import Hydra.Ledger.Cardano (cardanoLedger, newLedgerEnv)
 import Hydra.Logging (traceWith, withTracer)
+import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.Logging.Messages (HydraLog (..))
 import Hydra.Logging.Monitoring (withMonitoring)
 import Hydra.Node (
@@ -83,6 +84,7 @@ run opts = do
         -- customSink <- createCustomSink
         let eventSinks =
               [ filePersistenceSink
+              , exampleUDPSink "localhost" "3000"
               -- NOTE: Add any custom sinks here
               -- , customSink
               ]

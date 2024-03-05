@@ -67,6 +67,7 @@ library
     Hydra.Chain.ScriptRegistry
     Hydra.Events
     Hydra.Events.FileBased
+    Hydra.Events.UDP
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
     Hydra.HeadLogic.Input
@@ -136,6 +137,7 @@ library
     , lens-aeson
     , modern-uri
     , network
+    , network-udp
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus-cardano
@@ -162,7 +164,6 @@ library
     , warp
     , warp-tls
     , websockets
-    , network-udp
 
   ghc-options:     -haddock
 
