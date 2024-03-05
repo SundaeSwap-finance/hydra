@@ -50,13 +50,14 @@ import Hydra.Options (
   LedgerConfig (..),
   OfflineChainConfig (..),
   RunOptions (..),
-  validateRunOptions, KinesisConfig (..),
+  validateRunOptions, KinesisConfig (..), S3Config (..),
  )
 import Hydra.Persistence (createPersistenceIncremental)
 import Hydra.Tx.Environment (Environment (..))
 import Hydra.Utils (readJsonFileThrow)
 import System.Environment (getEnv)
 import System.IO qualified as IO
+import Hydra.Events.AWS.S3 (exampleS3EventPair)
 
 data ConfigurationException
   = -- XXX: this is not used
@@ -84,13 +85,16 @@ run opts = do
       pparams <- readJsonFileThrow parseJSON (cardanoLedgerProtocolParametersFile ledgerConfig)
       globals <- getGlobalsForChain chainConfig
       withCardanoLedger pparams globals $ \ledger -> do
-        incPersistence <- createPersistenceIncremental (persistenceDir <> "/state")
-        -- Hydrate with event source and sinks
-        (eventSource, filePersistenceSink) <- eventPairFromPersistenceIncremental incPersistence
-        let RunOptions{kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}} = opts
+        persistence <- createPersistenceIncremental $ persistenceDir <> "/state"
+        (fileEventSource, filePersistenceSink) <- eventPairFromPersistenceIncremental persistence
+        let RunOptions
+              { kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}
+              , s3Config = s3Config@S3Config{s3SourceEnabled}} = opts
 
-        eventSource <- maybe (pure fileEventSource) snd $ find fst [
-              (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+        --TODO(Elaine): asum
+        eventSource <- maybe (pure fileEventSource) snd $ find fst
+              [ (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+              , (s3SourceEnabled, fst <$> exampleS3EventPair s3Config)
               ]
 
         -- NOTE: Add any custom sink setup code here
@@ -112,8 +116,7 @@ run opts = do
             [ pure filePersistenceSink
             , exampleUDPSink "0.0.0.0" "3000"
             , snd <$> exampleKinesisEventPair kinesisConfig
-            -- NOTE: Add any custom sinks here
-            -- , customSink
+            , snd <$> exampleS3EventPair s3Config
             ]
         -- Load events and hydrate sinks
         wetHydraNode <- hydrate (contramap Node tracer) env ledger initialChainState eventSource eventSinks

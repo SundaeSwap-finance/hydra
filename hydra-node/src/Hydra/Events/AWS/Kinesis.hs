@@ -106,7 +106,7 @@ exampleKinesisSink = do
 
 exampleKinesisSource :: FromJSON e => Kinesis (EventSource e Kinesis)
 exampleKinesisSource = do
-  (awsEnv, KinesisConfig{kinesisStreamARN, kinesisStreamName, kinesisResumeTimeStamp, kinesisResumeShardId}) <- ask
+  (awsEnv, KinesisConfig{kinesisStreamARN, kinesisStreamName, kinesisResumeTimeStamp, kinesisResumeShardId, kinesisLimitShardId}) <- ask
 
   --get shards, assume they wont change while running
   let listShardsReq = AWS.newListShards
@@ -132,6 +132,7 @@ exampleKinesisSource = do
         & AWS.getShardIterator_streamName .~ Just kinesisStreamName
         & AWS.getShardIterator_streamARN .~ Just kinesisStreamARN
         & AWS.getShardIterator_timestamp .~ fmap posixSecondsToUTCTime kinesisResumeTimeStamp
+        & AWS.getShardIterator_startingSequenceNumber .~ kinesisResumeShardId
   --TODO(Elaine): rethrow from Nothing
   shardIteratorResponse <- sendThrow "Fetching shard iterator for Kinesis Event Source" awsEnv shardIderatorReq <&> fromMaybe "" . view AWS.getShardIteratorResponse_shardIterator
 
@@ -152,14 +153,17 @@ exampleKinesisSource = do
             loadedEvents <- parseKinesisRecords response
             putStrLn $ "Got " <> show (length loadedEvents) <> " records from Kinesis"
             putStrLn $ "EventIDs obtained: " <> show (fmap getEventId loadedEvents)
-            let nextShardIterator = response ^. AWS.getRecordsResponse_nextShardIterator
+            --NOTE(Elaine): if you don't provide a limit shard ID currently it'll just go on forever
+            -- I think right now things aren't lazy enough for that to be useful, since we'll never process the events till the eventsource is done
+
+            let nextShardIterator = mfilter (\it -> maybe True (it <) kinesisLimitShardId ) $ response ^. AWS.getRecordsResponse_nextShardIterator
 
             threadDelay (secondsToDiffTime 10)
 
             rec futureLoadedEvents <- do
                   liftIO . putStrLn $ "Getting events from next shard iterator: " <> show nextShardIterator
                   go (set getRecords_shardIterator <$> nextShardIterator <*> pure getRecordsReq)
-
+            --TODO(Elaine): handle duplicate records etc. easy way is just throw in a set
             pure $ loadedEvents <> futureLoadedEvents
     -- response <- sendThrow "Kinesis EventSource Get" awsEnv getRecordsReq
     loadedEvents <- go (Just getRecordsReq)
