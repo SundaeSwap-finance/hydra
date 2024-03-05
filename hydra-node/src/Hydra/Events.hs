@@ -29,6 +29,7 @@ newtype EventSink e m = EventSink
   { putEvent :: HasEventId e => e -> m ()
   -- ^ Send a single event to the event sink.
   }
+--TODO(Elaine): low priority but probably we can write some instances for this like contravariant
 
 putEventToSinks :: (Monad m, HasEventId e) => [EventSink e m] -> e -> m ()
 putEventToSinks sinks e = forM_ sinks $ \sink -> putEvent sink e

@@ -78,6 +78,9 @@ import Options.Applicative.Builder (str)
 import Options.Applicative.Help (vsep)
 import Paths_hydra_node (version)
 import Test.QuickCheck (elements, listOf, listOf1, oneof, suchThat, vectorOf)
+import Data.Time (parseTimeM, defaultTimeLocale)
+import Text.Read (readPrec)
+import Data.Time.Clock.POSIX (POSIXTime)
 
 data Command
   = Run RunOptions
@@ -170,6 +173,7 @@ data RunOptions = RunOptions
   , chainConfig :: ChainConfig
   , ledgerConfig :: LedgerConfig
   , kinesisConfig :: KinesisConfig
+  , s3Config :: S3Config
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -254,6 +258,7 @@ runOptionsParser =
         )
     <*> ledgerConfigParser
     <*> kinesisConfigParser
+    <*> s3ConfigParser
 
 -- | Alternative parser to 'runOptionsParser' for running the cardano-node in
 -- offline mode.
@@ -414,10 +419,21 @@ instance Arbitrary ChainConfig where
           , ledgerGenesisFile
           }
 
+data S3Config = S3Config
+  { s3BucketName :: Text
+  , s3ObjectPath :: Text -- ^ Events will be stored in and fetched from this path
+  , s3SinkEnabled :: Bool
+  , s3SourceEnabled :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
 -- | Kinesis sink and stream configuration. AWS credentials are handled via amazonka's discover, aka, usual env vars
 data KinesisConfig = KinesisConfig
   { kinesisStreamName :: Text
   , kinesisStreamARN :: Text
+  , kinesisResumeTimeStamp :: Maybe POSIXTime
+  , kinesisResumeShardId :: Maybe Text
   , kinesisSinkEnabled :: Bool
   , kinesisSourceEnabled :: Bool
   }
@@ -431,12 +447,24 @@ instance Arbitrary KinesisConfig where
       <*> arbitrary
       <*> arbitrary
       <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
 
   shrink = genericShrink
 
 -- TODO(Elaine): a simple sink & source bool pair won't scale past multiple sinks & sources
 -- for the simple reason that we can't currently have multiple sources, so we should figure out an interface to pick source from CLI
 -- proper CLI solution should also make stream name and arn dependent on what's enabled
+
+instance Arbitrary S3Config where
+  arbitrary =
+    S3Config
+      <$> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+
+  shrink = genericShrink
 
 kinesisConfigParser :: Parser KinesisConfig
 kinesisConfigParser =
@@ -451,6 +479,18 @@ kinesisConfigParser =
           <> metavar "KINESIS-STREAM-ARN"
           <> help "ARN of the AWS Kinesis stream to use."
       )
+    <*> optional (
+      fromInteger <$> option auto (
+        long "kinesis-resume-timestamp"
+            <> metavar "KINESIS-RESUME-TIMESTAMP"
+            <> help "Timestamp to resume from.")
+      )
+    <*> optional (
+      strOption (
+        long "kinesis-resume-shard-id"
+            <> metavar "KINESIS-RESUME-SHARD-ID"
+            <> help "Shard ID to resume from.")
+      )
     <*> flag
       False
       True
@@ -462,6 +502,34 @@ kinesisConfigParser =
       True
       ( long "enable-kinesis-source"
           <> help "Enable the AWS Kinesis event source."
+      )
+
+s3ConfigParser :: Parser S3Config
+s3ConfigParser =
+  S3Config
+    <$> strOption
+      ( long "s3-bucket-name"
+          <> value ""
+          <> metavar "S3-BUCKET-NAME"
+          <> help "Name of the AWS S3 bucket to use."
+      )
+    <*> strOption
+      ( long "s3-object-path"
+          <> value "events"
+          <> metavar "S3-OBJECT-PATH"
+          <> help "Path in the S3 bucket to use as a sink and source."
+      )
+    <*> flag
+      False
+      True
+      ( long "enable-s3-sink"
+          <> help "Enable the AWS S3 event sink."
+      )
+    <*> flag
+      False
+      True
+      ( long "enable-s3-source"
+          <> help "Enable the AWS S3 event source."
       )
 
 offlineChainConfigParser :: Parser OfflineChainConfig

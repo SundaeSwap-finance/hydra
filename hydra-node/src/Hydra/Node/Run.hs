@@ -2,10 +2,6 @@ module Hydra.Node.Run where
 
 import Hydra.Prelude hiding (fromList)
 
-import Amazonka (newEnv)
-import Amazonka qualified as AWS
-import Amazonka.Auth (discover)
-import Amazonka.Logger qualified as AWS
 import Hydra.API.Server (Server (..), withAPIServer)
 import Hydra.API.ServerOutput (ServerOutput (..))
 import Hydra.Cardano.Api (
@@ -16,12 +12,10 @@ import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters)
 import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
-import Hydra.Events.Kinesis (exampleKinesisEventPair)
+import Hydra.Events.AWS.Kinesis (exampleKinesisEventPair)
 import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.HeadLogic (
   Environment (..),
-  Input (..),
-  defaultTTL,
  )
 import Hydra.Ledger.Cardano qualified as Ledger
 import Hydra.Ledger.Cardano.Configuration (
@@ -54,11 +48,9 @@ import Hydra.Options (
   LedgerConfig (..),
   OfflineChainConfig (..),
   RunOptions (..),
-  validateRunOptions,
+  validateRunOptions, KinesisConfig (..),
  )
 import Hydra.Persistence (createPersistenceIncremental, eventPairFromPersistenceIncremental)
-import System.Environment (getEnv)
-import System.IO qualified as IO
 
 data ConfigurationException
   = ConfigurationException ProtocolParametersConversionError
@@ -89,30 +81,17 @@ run opts = do
         dryHydraNode <- mkHydraNode (contramap Node tracer) env ledger initialChainState
         -- Hydrate with event source and sinks
         persistence <- createPersistenceIncremental $ persistenceDir <> "/state"
-        let (eventSource, filePersistenceSink) = eventPairFromPersistenceIncremental persistence
-        udpSink <- exampleUDPSink "0.0.0.0" "3000"
+        let (fileEventSource, filePersistenceSink) = eventPairFromPersistenceIncremental persistence
+        let RunOptions{kinesisConfig = kinesisConfig@KinesisConfig{kinesisSourceEnabled}} = opts
 
-        let RunOptions{kinesisConfig} = opts
+        eventSource <- maybe (pure fileEventSource) snd $ find fst [
+              (kinesisSourceEnabled, fst <$> exampleKinesisEventPair kinesisConfig)
+              ]
 
-        -- NOTE: Add any custom sink setup code here
-        -- customSink <- createCustomSink
-        udpSink <- exampleUDPSink "0.0.0.0" "3000"
-        
-        awsLogger <- AWS.newLogger AWS.Debug IO.stdout -- TODO(Elaine): we can use our own nice logging
-        awsDiscoveredEnv <- newEnv discover
-        let awsEnv = awsDiscoveredEnv { AWS.logger = awsLogger}
-        --TODO(Elaine): cli option instead of env var
-        streamArn <- getEnv "KINESIS_STREAM_ARN"
-        streamName <- getEnv "KINESIS_STREAM_NAME"
-
-        --turn this into source
-        loadedRecords <- AWS.runResourceT $ do
-          --TODO(Elaine): error handling w sendEither
-          pure []
         eventSinks <-
           sequence
             [ pure filePersistenceSink
-            , pure udpSink
+            , exampleUDPSink "0.0.0.0" "3000"
             , snd <$> exampleKinesisEventPair kinesisConfig
             ]
         -- Load events and hydrate sinks

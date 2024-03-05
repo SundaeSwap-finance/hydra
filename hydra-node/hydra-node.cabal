@@ -68,7 +68,9 @@ library
     Hydra.ContestationPeriod
     Hydra.Crypto
     Hydra.Events
-    Hydra.Events.Kinesis
+    Hydra.Events.AWS.Kinesis
+    Hydra.Events.AWS.S3
+    Hydra.Events.AWS.Common
     Hydra.Events.UDP
     Hydra.HeadId
     Hydra.HeadLogic
@@ -107,11 +109,13 @@ library
     Hydra.Persistence
     Hydra.Snapshot
     Hydra.Utils
+    Gummiworm.Archive
 
   other-modules:   Paths_hydra_node
   build-depends:
     , aeson
     , amazonka
+    , amazonka-s3
     , amazonka-kinesis
     , base
     , base16-bytestring
@@ -167,6 +171,7 @@ library
     , text
     , time
     , transformers
+    , mtl
     , typed-protocols                                           >=0.1.0.0
     , typed-protocols-cborg                                     >=0.1.0.0
     , unliftio
@@ -175,6 +180,8 @@ library
     , wai-websockets
     , warp
     , websockets
+    , conduit
+    , zlib
 
   ghc-options:     -haddock
 
