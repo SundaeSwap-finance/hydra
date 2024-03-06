@@ -67,6 +67,7 @@ library
     Hydra.Chain.ScriptRegistry
     Hydra.Events
     Hydra.Events.FileBased
+    Hydra.Events.Kinesis
     Hydra.Events.UDP
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
@@ -96,6 +97,8 @@ library
   other-modules:   Paths_hydra_node
   build-depends:
     , aeson
+    , amazonka
+    , amazonka-kinesis
     , base
     , blockfrost-client               >=0.9.2.0
     , bytestring

@@ -2,6 +2,10 @@ module Hydra.Node.Run where
 
 import Hydra.Prelude hiding (fromList)
 
+import Amazonka (newEnv)
+import Amazonka qualified as AWS
+import Amazonka.Auth (discover)
+import Amazonka.Logger qualified as AWS
 import Cardano.Ledger.BaseTypes (Globals (..), boundRational, mkActiveSlotCoeff, unNonZero)
 import Cardano.Ledger.Shelley.API (computeRandomnessStabilisationWindow, computeStabilityWindow)
 import Cardano.Slotting.EpochInfo (fixedEpochInfo)
@@ -21,9 +25,10 @@ import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
 import Hydra.Events.FileBased (eventPairFromPersistenceIncremental)
+import Hydra.Events.Kinesis (exampleKinesisSink)
+import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.Ledger.Cardano (cardanoLedger, newLedgerEnv)
 import Hydra.Logging (traceWith, withTracer)
-import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.Logging.Messages (HydraLog (..))
 import Hydra.Logging.Monitoring (withMonitoring)
 import Hydra.Node (
@@ -50,6 +55,8 @@ import Hydra.Options (
 import Hydra.Persistence (createPersistenceIncremental)
 import Hydra.Tx.Environment (Environment (..))
 import Hydra.Utils (readJsonFileThrow)
+import System.Environment (getEnv)
+import System.IO qualified as IO
 
 data ConfigurationException
   = -- XXX: this is not used
@@ -83,13 +90,28 @@ run opts = do
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
         udpSink <- exampleUDPSink "0.0.0.0" "3000"
-        let eventSinks =
-              [ filePersistenceSink
-              , udpSink
-              -- NOTE: Add any custom sinks here
-              -- , customSink
-              ]
+
+        awsLogger <- AWS.newLogger AWS.Debug IO.stdout -- TODO(Elaine): we can use our own nice logging
+        awsDiscoveredEnv <- newEnv discover
+        let awsEnv = awsDiscoveredEnv{AWS.logger = awsLogger}
+        -- TODO(Elaine): cli option instead of env var
+        streamArn <- getEnv "KINESIS_STREAM_ARN"
+        streamName <- getEnv "KINESIS_STREAM_NAME"
+
+        -- turn this into source
+        loadedRecords <- AWS.runResourceT $ do
+          -- TODO(Elaine): error handling w sendEither
+          pure []
+        eventSinks <-
+          sequence
+            [ pure filePersistenceSink
+            , pure udpSink
+            , exampleKinesisSink awsEnv (fromString streamArn) (fromString streamName)
+            -- NOTE: Add any custom sinks here
+            -- , customSink
+            ]
         wetHydraNode <- hydrate (contramap Node tracer) env ledger initialChainState eventSource eventSinks
+
         -- Chain
         withChain <- prepareChainComponent tracer env chainConfig
         withChain (chainStateHistory wetHydraNode) (wireChainInput wetHydraNode) $ \chain -> do
