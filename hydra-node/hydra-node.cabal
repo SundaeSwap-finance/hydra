@@ -69,6 +69,7 @@ library
     Hydra.Crypto
     Hydra.Events
     Hydra.Events.UDP
+    Hydra.Events.Kinesis
     Hydra.HeadId
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
@@ -172,6 +173,8 @@ library
     , wai-websockets
     , warp
     , websockets
+    , amazonka-kinesis
+    , amazonka
 
   ghc-options:     -haddock
 

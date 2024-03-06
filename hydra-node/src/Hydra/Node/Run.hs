@@ -15,7 +15,7 @@ import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
 import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.HeadLogic (
   Environment (..),
-  Event (..),
+  Input (..),
   defaultTTL,
  )
 import Hydra.Ledger.Cardano qualified as Ledger
@@ -52,6 +52,13 @@ import Hydra.Options (
   validateRunOptions,
  )
 import Hydra.Persistence (createPersistenceIncremental, eventPairFromPersistenceIncremental)
+import Amazonka (newEnv)
+import Amazonka.Auth (discover)
+import qualified Amazonka as AWS
+import qualified Amazonka.Logger as AWS
+import qualified System.IO as IO
+import System.Environment (getEnv)
+import Hydra.Events.Kinesis (exampleKinesisSink)
 
 data ConfigurationException
   = ConfigurationException ProtocolParametersConversionError
@@ -86,13 +93,27 @@ run opts = do
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
         udpSink <- exampleUDPSink "0.0.0.0" "3000"
-        let eventSinks =
-              [ filePersistenceSink
-              , udpSink
-              -- NOTE: Add any custom sinks here
-              -- , customSink
-              ]
+        
+        awsLogger <- AWS.newLogger AWS.Debug IO.stdout -- TODO(Elaine): we can use our own nice logging
+        awsDiscoveredEnv <- newEnv discover
+        let awsEnv = awsDiscoveredEnv { AWS.logger = awsLogger}
+        --TODO(Elaine): cli option instead of env var
+        streamArn <- getEnv "KINESIS_STREAM_ARN"
+        streamName <- getEnv "KINESIS_STREAM_NAME"
+
+        --turn this into source
+        loadedRecords <- AWS.runResourceT $ do
+          --TODO(Elaine): error handling w sendEither
+          pure []
+        eventSinks <- sequence
+          [ pure filePersistenceSink
+          , pure udpSink
+          , exampleKinesisSink awsEnv (fromString streamArn) (fromString streamName)
+          ]
+          -- NOTE: Add any custom sinks here
+          -- , customSink
         wetHydraNode <- hydrate eventSource eventSinks dryHydraNode
+
         -- Chain
         withChain <- prepareChainComponent tracer env chainConfig
         withChain (chainStateHistory wetHydraNode) (wireChainInput wetHydraNode) $ \chain -> do
