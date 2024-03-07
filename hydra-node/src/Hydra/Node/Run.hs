@@ -25,7 +25,7 @@ import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
 import Hydra.Events.FileBased (eventPairFromPersistenceIncremental)
-import Hydra.Events.Kinesis (exampleKinesisSink)
+import Hydra.Events.Kinesis (exampleKinesisEventPair)
 import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.Ledger.Cardano (cardanoLedger, newLedgerEnv)
 import Hydra.Logging (traceWith, withTracer)
@@ -87,6 +87,8 @@ run opts = do
         incPersistence <- createPersistenceIncremental (persistenceDir <> "/state")
         -- Hydrate with event source and sinks
         (eventSource, filePersistenceSink) <- eventPairFromPersistenceIncremental incPersistence
+        let RunOptions{kinesisConfig} = opts
+
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
         udpSink <- exampleUDPSink "0.0.0.0" "3000"
@@ -106,10 +108,11 @@ run opts = do
           sequence
             [ pure filePersistenceSink
             , pure udpSink
-            , exampleKinesisSink awsEnv (fromString streamArn) (fromString streamName)
+            , snd <$> exampleKinesisEventPair kinesisConfig
             -- NOTE: Add any custom sinks here
             -- , customSink
             ]
+        -- Load events and hydrate sinks
         wetHydraNode <- hydrate (contramap Node tracer) env ledger initialChainState eventSource eventSinks
 
         -- Chain
