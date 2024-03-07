@@ -68,8 +68,8 @@ library
     Hydra.ContestationPeriod
     Hydra.Crypto
     Hydra.Events
-    Hydra.Events.UDP
     Hydra.Events.Kinesis
+    Hydra.Events.UDP
     Hydra.HeadId
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
@@ -111,6 +111,8 @@ library
   other-modules:   Paths_hydra_node
   build-depends:
     , aeson
+    , amazonka
+    , amazonka-kinesis
     , base
     , base16-bytestring
     , bytestring
@@ -173,8 +175,6 @@ library
     , wai-websockets
     , warp
     , websockets
-    , amazonka-kinesis
-    , amazonka
 
   ghc-options:     -haddock
 

@@ -169,6 +169,7 @@ data RunOptions = RunOptions
   , persistenceDir :: FilePath
   , chainConfig :: ChainConfig
   , ledgerConfig :: LedgerConfig
+  , kinesisConfig :: KinesisConfig
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -252,6 +253,7 @@ runOptionsParser =
             <|> Offline <$> offlineChainConfigParser
         )
     <*> ledgerConfigParser
+    <*> kinesisConfigParser
 
 -- | Alternative parser to 'runOptionsParser' for running the cardano-node in
 -- offline mode.
@@ -411,6 +413,56 @@ instance Arbitrary ChainConfig where
           { initialUTxOFile
           , ledgerGenesisFile
           }
+
+-- | Kinesis sink and stream configuration. AWS credentials are handled via amazonka's discover, aka, usual env vars
+data KinesisConfig = KinesisConfig
+  { kinesisStreamName :: Text
+  , kinesisStreamARN :: Text
+  , kinesisSinkEnabled :: Bool
+  , kinesisSourceEnabled :: Bool
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+instance Arbitrary KinesisConfig where
+  arbitrary =
+    KinesisConfig
+      <$> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+      <*> arbitrary
+
+  shrink = genericShrink
+
+-- TODO(Elaine): a simple sink & source bool pair won't scale past multiple sinks & sources
+-- for the simple reason that we can't currently have multiple sources, so we should figure out an interface to pick source from CLI
+-- proper CLI solution should also make stream name and arn dependent on what's enabled
+
+kinesisConfigParser :: Parser KinesisConfig
+kinesisConfigParser =
+  KinesisConfig
+    <$> strOption
+      ( long "kinesis-stream-name"
+          <> metavar "KINESIS-STREAM-NAME"
+          <> help "Name of the AWS Kinesis stream to use as a sink and source."
+      )
+    <*> strOption
+      ( long "kinesis-stream-arn"
+          <> metavar "KINESIS-STREAM-ARN"
+          <> help "ARN of the AWS Kinesis stream to use."
+      )
+    <*> flag
+      False
+      True
+      ( long "enable-kinesis-sink"
+          <> help "Enable the AWS Kinesis event sink."
+      )
+    <*> flag
+      False
+      True
+      ( long "enable-kinesis-source"
+          <> help "Enable the AWS Kinesis event source."
+      )
 
 offlineChainConfigParser :: Parser OfflineChainConfig
 offlineChainConfigParser =

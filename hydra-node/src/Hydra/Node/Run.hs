@@ -2,6 +2,10 @@ module Hydra.Node.Run where
 
 import Hydra.Prelude hiding (fromList)
 
+import Amazonka (newEnv)
+import Amazonka qualified as AWS
+import Amazonka.Auth (discover)
+import Amazonka.Logger qualified as AWS
 import Hydra.API.Server (Server (..), withAPIServer)
 import Hydra.API.ServerOutput (ServerOutput (..))
 import Hydra.Cardano.Api (
@@ -12,6 +16,7 @@ import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters)
 import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
+import Hydra.Events.Kinesis (exampleKinesisEventPair)
 import Hydra.Events.UDP (exampleUDPSink)
 import Hydra.HeadLogic (
   Environment (..),
@@ -52,13 +57,8 @@ import Hydra.Options (
   validateRunOptions,
  )
 import Hydra.Persistence (createPersistenceIncremental, eventPairFromPersistenceIncremental)
-import Amazonka (newEnv)
-import Amazonka.Auth (discover)
-import qualified Amazonka as AWS
-import qualified Amazonka.Logger as AWS
-import qualified System.IO as IO
 import System.Environment (getEnv)
-import Hydra.Events.Kinesis (exampleKinesisSink)
+import System.IO qualified as IO
 
 data ConfigurationException
   = ConfigurationException ProtocolParametersConversionError
@@ -90,6 +90,10 @@ run opts = do
         -- Hydrate with event source and sinks
         persistence <- createPersistenceIncremental $ persistenceDir <> "/state"
         let (eventSource, filePersistenceSink) = eventPairFromPersistenceIncremental persistence
+        udpSink <- exampleUDPSink "0.0.0.0" "3000"
+
+        let RunOptions{kinesisConfig} = opts
+
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
         udpSink <- exampleUDPSink "0.0.0.0" "3000"
@@ -105,13 +109,13 @@ run opts = do
         loadedRecords <- AWS.runResourceT $ do
           --TODO(Elaine): error handling w sendEither
           pure []
-        eventSinks <- sequence
-          [ pure filePersistenceSink
-          , pure udpSink
-          , exampleKinesisSink awsEnv (fromString streamArn) (fromString streamName)
-          ]
-          -- NOTE: Add any custom sinks here
-          -- , customSink
+        eventSinks <-
+          sequence
+            [ pure filePersistenceSink
+            , pure udpSink
+            , snd <$> exampleKinesisEventPair kinesisConfig
+            ]
+        -- Load events and hydrate sinks
         wetHydraNode <- hydrate eventSource eventSinks dryHydraNode
 
         -- Chain
