@@ -12,6 +12,8 @@ import Amazonka.S3 qualified as AWS
 import Control.Lens.Operators ((^.), (.~), (?~))
 import Data.Aeson (encode)
 import Data.Aeson.Decoding (eitherDecode)
+import Data.Time.Clock qualified as Time
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Hydra.Events (EventSink (..), EventSource (..), HasEventId (..), EventId)
 import System.IO qualified as IO
 import Control.Monad.Except
@@ -60,10 +62,12 @@ sendThrow task env sendRecord = do
 s3EventPath :: EventId -> S3 AWS.ObjectKey
 s3EventPath eventId = do
   (_, S3Config{s3ObjectPath}) <- ask
+  posixTime <- liftIO $ do
+    truncate <$> getPOSIXTime
   pure $
     AWS.ObjectKey ""
       & AWS.objectKey_keyPrefix '/' .~ s3ObjectPath
-      & AWS.objectKey_keyName '/' .~ show eventId
+      & AWS.objectKey_keyName '/' .~ show posixTime
 
 exampleS3EventPair :: S3Config -> IO (EventSource _e IO, EventSink _e IO)
 exampleS3EventPair s3Config@S3Config{s3SinkEnabled, s3SourceEnabled}= do
@@ -90,24 +94,31 @@ exampleS3Sink = do
 
   -- we can do this based on time, or we can do it based on number of events
   -- for now, a simple solution is to just mod the event ID
-
+  -- NB: This seems to fire every 100 ms. Not sure if that can be controlled.
+  initialTime <- liftIO getCurrentTime
+  currentTime <- newIORef initialTime
   pure $ EventSink $ \e -> do
     eventPath <- s3EventPath (getEventId e)
 
     liftIO . atomically $ writeTQueue eventQueue e
-
-    when (getEventId e `mod` 99 == 0) $ do
+    newTime <- liftIO getCurrentTime
+    -- diffUTCTime deadline <$> getCurrentTime
+    elapsed <- liftIO $ diffUTCTime <$> pure newTime <*> readIORef currentTime
+    -- when (getEventId e `mod` 99 == 0) $ do -- What was here. Fire every 100 events.
+    when (elapsed >= 10) $ do -- TODO: Make time variable.
+      liftIO $ writeIORef currentTime newTime
       --things can change between when we check and when we flush, but for current usage, poses no issue
       --TODO(Elaine): be careful, because the title of the archive won't always correspond exactly to which events r included
       flushedEvents <- liftIO . atomically $ flushTQueue eventQueue
       let flushedTransactions = mapMaybe (\case TransactionAppliedToLocalUTxO{tx, newLocalUTxO, stateChangeID} -> Just (stateChangeID, tx); _ -> Nothing) flushedEvents
-      serializedArchiveTransactions <- liftIO $ serializeArchiveTransactions . fmap snd $ flushedTransactions
-      let putObjectReq = AWS.newPutObject (AWS.BucketName s3BucketName) eventPath (AWS.toBody serializedArchiveTransactions )-- (Base64 $ encode e)
+      let numTXs = length flushedTransactions
+      liftIO . putStrLn $ "Flushing " <> show (numTXs) <> " events to S3"
+      when (numTXs > 0) do
+        serializedArchiveTransactions <- liftIO $ serializeArchiveTransactions . fmap snd $ flushedTransactions
+        let putObjectReq = AWS.newPutObject (AWS.BucketName s3BucketName) eventPath (AWS.toBody serializedArchiveTransactions )-- (Base64 $ encode e)
 
-      liftIO . putStrLn $ "Flushing " <> show (length flushedEvents) <> " events to S3"
-      response <- sendThrow "S3 Event Sink putEvent" awsEnv putObjectReq
-      liftIO $ putStrLn "Flushed events to S3"
-
+        response <- sendThrow "S3 Event Sink putEvent" awsEnv putObjectReq
+        liftIO $ putStrLn "Flushed events to S3"
 
 exampleS3Source :: S3 (EventSource _ S3)
 exampleS3Source = do
