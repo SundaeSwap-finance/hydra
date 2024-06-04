@@ -16,6 +16,7 @@ import Hydra.Ledger (ChainSlot, IsTx, TxIdType, UTxOType, ValidationError)
 import Hydra.Network.Message (Message)
 import Hydra.Party (Party)
 import Hydra.Snapshot (Snapshot, SnapshotNumber)
+import Codec.Serialise.Class (Serialise)
 
 -- | Analogous to inputs, the pure head logic "core" can have effects emited to
 -- the "shell" layers and we distinguish the same: effects onto the client, the
@@ -111,6 +112,8 @@ deriving stock instance (IsTx tx, Eq (HeadState tx), Eq (ChainStateType tx)) => 
 deriving stock instance (IsTx tx, Show (HeadState tx), Show (ChainStateType tx)) => Show (StateChanged tx)
 deriving anyclass instance (IsTx tx, ToJSON (ChainStateType tx)) => ToJSON (StateChanged tx)
 deriving anyclass instance (IsTx tx, FromJSON (HeadState tx), FromJSON (ChainStateType tx)) => FromJSON (StateChanged tx)
+-- deriving anyclass instance (IsTx tx, Serialise tx, Serialise (HeadState tx), Serialise (Signature (Snapshot tx)), Serialise (ChainStateType tx), Serialise (MultiSignature (Snapshot tx))) => Serialise (StateChanged tx)
+-- getting too hard to derive
 
 data Outcome tx
   = -- | Continue with the given state updates and side effects.

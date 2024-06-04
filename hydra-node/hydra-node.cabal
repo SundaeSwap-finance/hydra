@@ -132,6 +132,9 @@ library
     , cardano-slotting
     , cardano-strict-containers
     , cborg
+    , cborg-json
+    -- we might be able to remove the dep on cborr-json with a serialise instance for statechanged
+    -- but it was being a pain and I didn't want to spend more time on it
     , containers
     , contra-tracer
     , cryptonite
