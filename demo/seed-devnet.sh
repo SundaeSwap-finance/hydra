@@ -55,7 +55,7 @@ function seedFaucet() {
 
     ACTOR_ADDR=$(ccli address build --payment-verification-key-file ${DEVNET_DIR}/credentials/${ACTOR}.vk)
 
-    ccli transaction build --babbage-era --cardano-mode \
+    ccli conway transaction build --cardano-mode \
         --change-address ${FAUCET_ADDR} \
         --tx-in ${FAUCET_TXIN} \
         --tx-out ${ACTOR_ADDR}+${AMOUNT} \
@@ -86,4 +86,4 @@ seedFaucet "alice-funds" 100000000 # 100 Ada to commit
 seedFaucet "bob-funds" 50000000 # 50 Ada to commit
 seedFaucet "carol-funds" 25000000 # 25 Ada to commit
 
-./export-tx-id-and-pparams.sh
+./export-tx-id-and-pparams.sh ${CCLI_CMD} ${HYDRA_NODE_CMD}
