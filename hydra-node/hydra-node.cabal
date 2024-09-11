@@ -66,6 +66,7 @@ library
     Hydra.Chain.ScriptRegistry
     Hydra.Events
     Hydra.Events.FileBased
+    Hydra.Events.UDP
     Hydra.HeadLogic
     Hydra.HeadLogic.Error
     Hydra.HeadLogic.Input
@@ -114,6 +115,7 @@ library
     , cardano-slotting
     , cardano-strict-containers
     , cborg
+    , cborg-json
     , containers
     , contra-tracer
     , cryptonite
@@ -134,6 +136,7 @@ library
     , modern-uri
     , network
     , network-mux
+    , network-udp
     , optparse-applicative
     , ouroboros-consensus
     , ouroboros-consensus-cardano

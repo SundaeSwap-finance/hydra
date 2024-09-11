@@ -19,6 +19,7 @@ import Hydra.Chain.CardanoClient (QueryPoint (..), queryGenesisParameters)
 import Hydra.Chain.Direct (loadChainContext, mkTinyWallet, withDirectChain)
 import Hydra.Chain.Direct.State (initialChainState)
 import Hydra.Chain.Offline (loadGenesisFile, withOfflineChain)
+import Hydra.Events.UDP (udpSink)
 import Hydra.Events.FileBased (eventPairFromPersistenceIncremental)
 import Hydra.Ledger.Cardano (cardanoLedger, newLedgerEnv)
 import Hydra.Logging (Verbosity (..), traceWith, withTracer)
@@ -80,8 +81,10 @@ run opts = do
             =<< createPersistenceIncremental (persistenceDir <> "/state")
         -- NOTE: Add any custom sink setup code here
         -- customSink <- createCustomSink
+        udpSink' <- udpSink "0.0.0.0" "23457"
         let eventSinks =
               [ filePersistenceSink
+              , udpSink'
               -- NOTE: Add any custom sinks here
               -- , customSink
               ]
